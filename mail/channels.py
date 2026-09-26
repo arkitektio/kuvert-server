@@ -17,6 +17,7 @@ class MailboxSyncSignal(BaseModel):
     updated: int = Field(default=0, description="Messages whose flags changed.")
     deleted: int = Field(default=0, description="Messages gone from the server.")
     more: bool = Field(default=False, description="More mail is waiting for the next sync (a large mailbox fills in over several).")
+    folder_ids: list[int] = Field(default_factory=list, description="The folders whose messages changed.")
 
 
 mailbox_sync_channel = build_channel(MailboxSyncSignal, name="kuvert_mailbox_syncs")
@@ -29,5 +30,5 @@ def org_group(organization_id: int) -> str:
 
 def broadcast_sync(result: object) -> None:
     """Tell the organization's subscribers a mailbox was synced."""
-    signal = MailboxSyncSignal(account_id=result.account_id, created=result.created, updated=result.updated, deleted=result.deleted, more=result.more)  # type: ignore[attr-defined]
+    signal = MailboxSyncSignal(account_id=result.account_id, created=result.created, updated=result.updated, deleted=result.deleted, more=result.more, folder_ids=result.touched_folders)  # type: ignore[attr-defined]
     mailbox_sync_channel.broadcast(signal, [org_group(result.organization_id)])  # type: ignore[attr-defined]

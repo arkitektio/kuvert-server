@@ -42,6 +42,7 @@ class SyncResult:
     folders: int = 0
     more: bool = False
     new_messages: list[int] = field(default_factory=list)
+    touched_folders: list[int] = field(default_factory=list)
 
 
 def claim(account_id: int) -> bool:
@@ -139,6 +140,7 @@ def run(account_id: int, folder_ids: list[int] | None = None) -> SyncResult:
         folders=outcome.folders,
         more=outcome.more,
         new_messages=outcome.new_messages,
+        touched_folders=sorted(outcome.touched_folders),
     )
 
 

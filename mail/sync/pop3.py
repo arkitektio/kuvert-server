@@ -30,6 +30,7 @@ class Pop3Result:
     folders: int = 1
     more: bool = False
     new_messages: list[int] = field(default_factory=list)
+    touched_folders: set[int] = field(default_factory=set)
 
 
 def inbox(account: models.MailAccount) -> models.MailFolder:
@@ -99,6 +100,8 @@ def sync(client: GuardedPOP3, account: models.MailAccount) -> Pop3Result:
         for number in downloaded:
             client.dele(number)
 
+    if result.created or result.deleted:
+        result.touched_folders.add(folder.id)
     folder.total_count = folder.messages.count()
     folder.unread_count = folder.messages.exclude(flags__contains=["\\Seen"]).count()
     folder.backfill_done = not result.more

@@ -24,4 +24,4 @@ async def mailbox_syncs(self, info: Info) -> AsyncGenerator[types.MailboxSyncEve
     async for signal in mailbox_sync_channel.listen(info.context, [group]):
         if not await database_sync_to_async(visible)(signal.account_id):
             continue
-        yield types.MailboxSyncEvent(account_id=strawberry.ID(str(signal.account_id)), created=signal.created, updated=signal.updated, deleted=signal.deleted, more=signal.more)
+        yield types.MailboxSyncEvent(account_id=strawberry.ID(str(signal.account_id)), created=signal.created, updated=signal.updated, deleted=signal.deleted, more=signal.more, folders=[strawberry.ID(str(f)) for f in signal.folder_ids])

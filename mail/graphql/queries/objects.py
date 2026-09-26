@@ -1,15 +1,33 @@
-"""Single objects by id, presets and OAuth providers."""
+"""Single objects by id, counts, presets and OAuth providers."""
 
 from typing import Optional
 
 import strawberry
+import strawberry_django
 from kante.types import Info
 
-from mail import enums, models, presets, types
+from mail import enums, filters, models, presets, types
 from mail.graphql.utils import get_or_404
 from mail.oauth.providers import configured_providers
+from mail.scoping import for_org
 
-__all__ = ["mail_account", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "oauth_providers"]
+__all__ = ["mail_account", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "oauth_providers", "threads_count", "messages_count"]
+
+
+def threads_count(info: Info, filters: Optional[filters.ThreadFilter] = None) -> int:
+    """How many conversations match (the same filters as `threads`), e.g. for a list header."""
+    rows = for_org(models.Thread, info)
+    if filters is not None:
+        rows = strawberry_django.filters.apply(filters, rows, info)
+    return rows.count()
+
+
+def messages_count(info: Info, filters: Optional[filters.MessageFilter] = None) -> int:
+    """How many messages match (the same filters as `messages`)."""
+    rows = for_org(models.Message, info)
+    if filters is not None:
+        rows = strawberry_django.filters.apply(filters, rows, info)
+    return rows.count()
 
 
 def mail_account(info: Info, id: strawberry.ID) -> types.MailAccount:

@@ -82,6 +82,13 @@ the schema and never written to history rows.
 
 - `messages(filters: {account, folder, folderRole, thread, unread, flagged, hasFlag, sender,
   recipient, dateFrom, dateTo, hasAttachments, search, similarTo}, ordering, pagination)`.
+- `threads(filters: {account, folder, folderRole, unread, flagged, hasAttachments, search, ids})`
+  lists conversations directly; a conversation matches when any of its messages does. A row
+  shows `latestMessage(folder, folderRole)`, `participants` (distinct senders, oldest first),
+  `unreadCount(folder, folderRole)`, `flagged` and `hasAttachments`. `threadsCount` and
+  `messagesCount` take the same filters. `mailAccounts(filters: {search})` matches name and address.
+- `mailboxSyncs` events carry `folders`: the folders whose messages changed, so a client
+  refetches only those lists.
 - `search` combines a substring match on subject, sender and text with semantic similarity:
   "airline" finds the flight confirmation. `similarTo` orders messages by likeness to another
   message.

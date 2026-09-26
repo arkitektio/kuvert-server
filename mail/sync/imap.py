@@ -59,6 +59,7 @@ class ImapResult:
     folders: int = 0
     more: bool = False
     new_messages: list[int] = field(default_factory=list)
+    touched_folders: set[int] = field(default_factory=set)
 
 
 def guess_role(path: str, flags: tuple[bytes, ...], delimiter: str | None) -> str:
@@ -239,6 +240,9 @@ def sync(client: GuardedIMAPClient, account: models.MailAccount, folder_ids: lis
     if folder_ids is not None:
         folders = [folder for folder in folders if folder.id in set(folder_ids)]
     for folder in folders:
+        before = (result.created, result.updated, result.deleted)
         sync_folder(client, account, folder, result, condstore)
+        if (result.created, result.updated, result.deleted) != before:
+            result.touched_folders.add(folder.id)
         result.folders += 1
     return result

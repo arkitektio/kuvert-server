@@ -37,6 +37,11 @@ class MailAccountFilter:
         return Q(**{f"{prefix}status": value.value})
 
     @strawberry_django.filter_field
+    def search(self, value: str, prefix: str) -> Q:
+        """Name, address or sender name contains this (case-insensitive)."""
+        return Q(**{f"{prefix}name__icontains": value}) | Q(**{f"{prefix}email_address__icontains": value}) | Q(**{f"{prefix}display_name__icontains": value})
+
+    @strawberry_django.filter_field
     def mine(self, info: Info, value: bool, prefix: str) -> Q:
         """Only mailboxes the caller linked (true), or only ones shared with them (false)."""
         q = Q(**{f"{prefix}creator": info.context.request.user})
@@ -61,6 +66,20 @@ class MailFolderFilter:
     def sync_enabled(self, value: bool, prefix: str) -> Q:
         """Only folders that are (not) synced."""
         return Q(**{f"{prefix}sync_enabled": value})
+
+
+def _with_message(prefix: str, messages: QuerySet) -> Q:
+    """A conversation matches when any of its messages is in ``messages``."""
+    return Q(**{f"{prefix}id__in": messages.exclude(thread=None).values("thread_id")})
+
+
+def _message_text(value: str, prefix: str = "") -> Q:
+    return (
+        Q(**{f"{prefix}subject__icontains": value})
+        | Q(**{f"{prefix}sender_name__icontains": value})
+        | Q(**{f"{prefix}sender_address__icontains": value})
+        | Q(**{f"{prefix}text_body__icontains": value})
+    )
 
 
 @strawberry_django.filter_type(models.Message)
@@ -137,13 +156,7 @@ class MessageFilter:
 
     @strawberry_django.filter_field(description="Search by text: a case-insensitive substring of the subject, sender or text; or semantic similarity to them (\"flight booking\" finds the airline's confirmation). Substring matches rank first, then by similarity; an explicit `ordering` replaces that ranking.")
     def search(self, info: Info, queryset: QuerySet, value: str, prefix: str) -> tuple[QuerySet, Q]:
-        lexical = (
-            Q(**{f"{prefix}subject__icontains": value})
-            | Q(**{f"{prefix}sender_name__icontains": value})
-            | Q(**{f"{prefix}sender_address__icontains": value})
-            | Q(**{f"{prefix}text_body__icontains": value})
-        )
-        return hybrid_search(queryset, prefix, value, lexical)
+        return hybrid_search(queryset, prefix, value, _message_text(value, prefix))
 
     @strawberry_django.filter_field(description="Order by similarity to the given message, nearest first (no cut-off; composes with other filters and pagination). Empty when the message is not visible or has no embedding yet.")
     def similar_to(self, info: Info, queryset: QuerySet, value: strawberry.ID, prefix: str) -> tuple[QuerySet, Q]:
@@ -180,11 +193,39 @@ class ThreadFilter:
         return Q(**{f"{prefix}id__in": models.Message.objects.filter(folder_id=value).values("thread_id")})
 
     @strawberry_django.filter_field
+    def ids(self, value: list[strawberry.ID], prefix: str) -> Q:
+        """Only these conversations."""
+        return _ids(prefix, "id", value)
+
+    @strawberry_django.filter_field
+    def folder_role(self, value: enums.FolderRole, prefix: str) -> Q:
+        """Only conversations with a message in a folder with this role (e.g. every INBOX)."""
+        return _with_message(prefix, models.Message.objects.filter(folder__role=value.value))
+
+    @strawberry_django.filter_field
     def unread(self, value: bool, prefix: str) -> Q:
         """Only conversations with (without) an unread message."""
-        unread = models.Message.objects.exclude(flags__contains=["\\Seen"]).values("thread_id")
-        q = Q(**{f"{prefix}id__in": unread})
+        q = _with_message(prefix, models.Message.objects.exclude(flags__contains=["\\Seen"]))
         return q if value else ~q
+
+    @strawberry_django.filter_field
+    def flagged(self, value: bool, prefix: str) -> Q:
+        """Only conversations with (without) a flagged message."""
+        q = _with_message(prefix, models.Message.objects.filter(flags__contains=["\\Flagged"]))
+        return q if value else ~q
+
+    @strawberry_django.filter_field
+    def has_attachments(self, value: bool, prefix: str) -> Q:
+        """Only conversations with (without) a message with attachments."""
+        q = _with_message(prefix, models.Message.objects.filter(has_attachments=True))
+        return q if value else ~q
+
+    @strawberry_django.filter_field(description="Only conversations with a message matching the text: the same substring and meaning search as `messages(filters: {search})`.")
+    def search(self, info: Info, queryset: QuerySet, value: str, prefix: str) -> Q:
+        # Only the messages of the conversations still in play (already scoped to what the caller sees).
+        candidates = models.Message.objects.filter(thread_id__in=queryset.values("id"))
+        candidates, predicate = hybrid_search(candidates, "", value, _message_text(value))
+        return Q(**{f"{prefix}id__in": candidates.filter(predicate).order_by().values("thread_id")})
 
 
 @strawberry_django.order_type(models.Thread)

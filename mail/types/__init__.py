@@ -8,6 +8,7 @@ import kante
 import strawberry
 import strawberry_django
 from django.conf import settings
+from django.db.models import F
 from django.utils import timezone
 from kante.types import Info
 
@@ -210,6 +211,18 @@ class Message(OrgScoped):
         return self.raw  # type: ignore[attr-defined,return-value]
 
 
+def _thread_messages(thread: object, info: Info, folder: Optional[strawberry.ID] = None, folder_role: Optional[enums.FolderRole] = None):  # noqa: ANN202
+    """The conversation's messages the caller may see, optionally within a folder or a folder role."""
+    from mail.scoping import scope_queryset
+
+    rows = scope_queryset(models.Message.objects.filter(thread_id=thread.id), info)  # type: ignore[attr-defined]
+    if folder is not None:
+        rows = rows.filter(folder_id=folder)
+    if folder_role is not None:
+        rows = rows.filter(folder__role=folder_role.value)
+    return rows
+
+
 @kante.django_type(models.Thread, pagination=True, filters=filters.ThreadFilter, ordering=filters.ThreadOrder, description="A conversation: messages linked by In-Reply-To/References, across the mailbox's folders.")
 class Thread(OrgScoped):
     id: strawberry.ID
@@ -227,6 +240,31 @@ class Thread(OrgScoped):
     @strawberry_django.field(description="Whether a message of the conversation is unread.")
     def unread(self) -> bool:
         return models.Message.objects.filter(thread_id=self.id).exclude(flags__contains=["\\Seen"]).exists()  # type: ignore[attr-defined]
+
+    @strawberry_django.field(description="The newest message, optionally only within a folder or a folder role: what a list row shows. Null when the conversation has no message there.")
+    def latest_message(self, info: Info, folder: Optional[strawberry.ID] = None, folder_role: Optional[enums.FolderRole] = None) -> Optional[Message]:
+        return _thread_messages(self, info, folder, folder_role).order_by(F("date").desc(nulls_last=True), F("received_at").desc(nulls_last=True), F("uid").desc(nulls_last=True), "-id").first()  # type: ignore[return-value]
+
+    @strawberry_django.field(description="Distinct senders, oldest first (\"Anna, Ben & 2 more\").")
+    def participants(self, info: Info) -> List[Address]:
+        seen: dict[str, Address] = {}
+        for name, address in _thread_messages(self, info).order_by(F("date").asc(nulls_last=True), F("received_at").asc(nulls_last=True), F("uid").asc(nulls_last=True), "id").values_list("sender_name", "sender_address"):
+            key = address or name
+            if key and key not in seen:
+                seen[key] = Address(name=name, address=address)
+        return list(seen.values())
+
+    @strawberry_django.field(description="Unread messages, optionally only within a folder or a folder role.")
+    def unread_count(self, info: Info, folder: Optional[strawberry.ID] = None, folder_role: Optional[enums.FolderRole] = None) -> int:
+        return _thread_messages(self, info, folder, folder_role).exclude(flags__contains=["\\Seen"]).count()
+
+    @strawberry_django.field(description="Whether any message of the conversation is flagged.")
+    def flagged(self, info: Info) -> bool:
+        return _thread_messages(self, info).filter(flags__contains=["\\Flagged"]).exists()
+
+    @strawberry_django.field(description="Whether any message of the conversation has attachments.")
+    def has_attachments(self, info: Info) -> bool:
+        return _thread_messages(self, info).filter(has_attachments=True).exists()
 
 
 @strawberry.type(description="A recipient the SMTP server refused.")
@@ -318,6 +356,7 @@ class MailboxSyncEvent:
     updated: int
     deleted: int
     more: bool
+    folders: List[strawberry.ID] = strawberry.field(description="The folders whose messages changed, so a client refetches only those lists.")
 
 
 @strawberry.type(description="What a delete did.")

@@ -64,6 +64,8 @@ class Query:
     message: types.Message = field(resolver=queries.message, description="A message by id.")
     threads: list[types.Thread] = field(description="Conversations of the visible mailboxes (paginated, filterable, orderable).")
     thread: types.Thread = field(resolver=queries.thread, description="A conversation by id.")
+    threads_count: int = field(resolver=queries.threads_count, description="How many conversations match the filters (for a list header).")
+    messages_count: int = field(resolver=queries.messages_count, description="How many messages match the filters.")
     outbox: list[types.OutgoingMessage] = field(description="Mail sent through the visible mailboxes, newest first.")
     outgoing_message: types.OutgoingMessage = field(resolver=queries.outgoing_message, description="A sent message by id.")
     mail_presets: list[types.MailPreset] = field(resolver=queries.mail_presets, description="Server settings of well-known providers (the one for `address`, when given).")
