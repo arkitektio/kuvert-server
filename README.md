@@ -1,5 +1,11 @@
 # Kuvert-Server
 
+> [!WARNING]
+> **Experimental, for personal use.** Kuvert is one of the most experimental Arkitekt services,
+> and much of it was written quickly with an AI assistant ("vibecoded"). It works for its author's
+> own setup, but it has not been reviewed or hardened the way the core services have. Expect
+> breaking changes, and think twice before trusting it with data or credentials that matter.
+
 A mail backend following the design principles of the [Arkitekt](https://arkitekt.live)
 framework. Users link the mailboxes they already have (Gmail, Outlook, Fastmail, a company
 IMAP or POP3 server). Kuvert syncs their mail into Postgres and serves it over GraphQL: folders,
