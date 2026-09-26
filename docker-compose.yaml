@@ -1,0 +1,20 @@
+services:
+  db:
+    environment:
+      POSTGRES_MULTIPLE_DATABASES: kuvert
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: fostgres
+    image: jhnnsrs/daten:next
+    labels:
+      - "arkitekt.default.service=db"
+  kuvert:
+    build: .
+    command: bash run.sh
+    ports:
+    - 8889:80
+    labels:
+      - "arkitekt.default.service=kuvert"
+  redis:
+    image: redis:latest
+    labels:
+      - "arkitekt.default.service=redis"

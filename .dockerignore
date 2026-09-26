@@ -1,0 +1,6 @@
+.venv
+.git
+**/__pycache__
+.pytest_cache
+# The Fernet key encrypting mailbox credentials is mounted at runtime, never baked into the image
+*.fernet

@@ -1,0 +1,62 @@
+django:
+  admin:
+    email: admin@admin.com
+    password: admin
+    username: admin
+  debug: false
+  hosts:
+  - "*"
+  secret_key: change-me-kuvert-dev-secret-key
+redis:
+  host: redis
+  port: 6379
+authentikate:
+  # authentikate 4.0 requires AUDIENCE. "*" (ANY_AUDIENCE) accepts a token minted
+  # for any service; the `aud` claim itself is still required. Replace with this
+  # service's identifier to check which service the token was minted for.
+  audience: "*"
+  issuers:
+  - kind: rsa
+    iss: lok
+    kid: lok-key-1
+    public_key: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDGFj0zB7j6KrTRFEP+a2Z7toLEwJ0ROF3qSkq6vo2aK5TGRv+D3V/6VhvM2NgtUIO1iqwvf4XETamhHt2xlVzJyoyMAnAGkwkMyQJpI6wG5g7NtrRc1kkeefWbLBVW+aEI++3ec3eD9PUhnjXbQXJwju8l2ldKg2skw2fZWrjfWo0S0CuvB05nXJ8BmmAo65BBv29gGVywzZEApv/Zu16l6ftCZSEKi/zMbK6YxCekl/h3sfK7uGj6uaab7XSqqANHDZDTSotD5ws8UdMb3IP4/qoJiJm0Lsw5XpmFTt9M+ekiv/9HsWjXtzOd0BpqxynlvF1fWDr0HVnrUCh1XMzn
+  static_tokens: {}
+postgres:
+  db_name: kuvert
+  engine: django.db.backends.postgresql
+  host: db
+  password: postgres
+  port: 5432
+  username: fostgres
+# Mailbox passwords and OAuth tokens are encrypted with this Fernet key (never commit it):
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" > kuvert.fernet
+secrets:
+  key_path: /secrets/kuvert.fernet
+# sync:                  # all optional (see CONFIG.md)
+#   batch_size: 200
+#   backfill_days: 365
+#   scheduled_every_seconds: 300
+# mail:
+#   allowed_private_hosts: []   # e.g. a mail server on the same network
+# oauth:                 # link Gmail / Microsoft mailboxes; see CONFIG.md
+#   google:
+#     client_id: <id>.apps.googleusercontent.com
+#     client_secret: <secret>
+#     redirect_urls:
+#     - https://example.org/kuvert/callback
+#   microsoft:
+#     client_id: <application id>
+#     client_secret: <secret>
+#     redirect_urls:
+#     - https://example.org/kuvert/callback
+# datalayer:             # S3 for raw messages and attachments; see CONFIG.md
+#   role_arn: arn:aws:iam::000000000000:role/datalayer
+#   access_key: <rustfs user>
+#   secret_key: <rustfs secret>
+#   host: rustfs
+#   port: 9000
+#   protocol: http
+#   bigfile:
+#     bucket: kuvert-mail
+# rekuest_hook:          # let the hub's rekuest schedule sync_all_mailboxes
+#   secret: <shared HMAC secret>

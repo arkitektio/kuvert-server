@@ -1,0 +1,108 @@
+"""Linking (and re-linking) a Gmail or Microsoft mailbox through OAuth.
+
+The service never handles the browser leg (as in bank): ``startOAuthLink`` returns an auth
+session -- what the client opens, and the redirect URL the provider sends the browser back to
+with ``?code&state``. The client catches that and calls ``completeOAuthLink(code, state)``.
+
+A state is only accepted from the member who started it, in the organization it was started in,
+once, and before it expires. Completing it exchanges the code (PKCE), reads the approved
+address from the id token and creates an ACTIVE XOAUTH2 mailbox -- or, for a re-link, stores the
+new tokens on the existing one and makes it ACTIVE again.
+"""
+
+import secrets
+from datetime import timedelta
+
+from django.conf import settings
+from django.db import transaction
+from django.utils import timezone
+
+from mail import crypto, models
+from mail.errors import MailError
+from mail.oauth import providers
+
+
+def _expires_in() -> timedelta:
+    return timedelta(seconds=int((settings.KUVERT_OAUTH or {}).get("link_expires_seconds") or 900))
+
+
+def start(organization, user, provider: str, protocol: str, redirect_url: str | None, name: str = "", account: models.MailAccount | None = None, login_hint: str | None = None) -> models.OAuthLink:  # noqa: ANN001
+    """A PENDING link whose ``auth_url`` the client opens."""
+    client = providers.client_for(provider)
+    redirect = redirect_url or client.redirect_urls[0]
+    if redirect not in client.redirect_urls:
+        raise MailError("redirectUrl is not one of the registered redirect URLs.", models.MailErrorCode.INVALID_STATE)
+    verifier, challenge = providers.pkce_pair()
+    state = secrets.token_urlsafe(32)
+    return models.OAuthLink.objects.create(
+        organization=organization,
+        creator=user,
+        provider=provider,
+        protocol=protocol,
+        state=state,
+        code_verifier=crypto.encrypt(verifier),
+        redirect_url=redirect,
+        auth_url=providers.authorize_url(client, state, challenge, redirect, login_hint or (account.email_address if account else None)),
+        account=account,
+        name=name,
+        expires_at=timezone.now() + _expires_in(),
+    )
+
+
+def pending_of(organization, user, state: str) -> models.OAuthLink:  # noqa: ANN001
+    """The caller's PENDING, unexpired link with ``state`` (INVALID_STATE / CODE_EXPIRED otherwise)."""
+    link = models.OAuthLink.objects.filter(state=state, organization=organization, creator=user).select_related("account").first()
+    if link is None or link.status != models.OAuthLinkStatus.PENDING:
+        raise MailError("Unknown or already used link state.", models.MailErrorCode.INVALID_STATE)
+    if link.expires_at < timezone.now():
+        raise MailError("This link expired; start a new one.", models.MailErrorCode.CODE_EXPIRED)
+    return link
+
+
+def complete(organization, user, code: str, state: str) -> models.MailAccount:  # noqa: ANN001
+    """Exchange the code and link the mailbox (blocking: HTTP to the provider)."""
+    link = pending_of(organization, user, state)
+    client = providers.client_for(link.provider)
+    tokens = providers.exchange_code(client, code, crypto.decrypt(link.code_verifier), link.redirect_url)
+    if not tokens.refresh_token:
+        raise MailError("The provider issued no refresh token; approve again with consent.", models.MailErrorCode.PROVIDER_ERROR)
+    address, display_name = providers.mailbox_address(client, tokens)
+    host, port, security = client.pop3 if link.protocol == models.Protocol.POP3 else client.imap
+    smtp_host, smtp_port, smtp_security = client.smtp
+    now = timezone.now()
+    token_fields = {
+        "secret": crypto.encrypt(tokens.refresh_token),
+        "access_token": crypto.encrypt(tokens.access_token),
+        "token_expires_at": now + timedelta(seconds=tokens.expires_in or 3600),
+    }
+    with transaction.atomic():
+        # Used once: a second completion of the same state finds it COMPLETED.
+        if not models.OAuthLink.objects.filter(pk=link.pk, status=models.OAuthLinkStatus.PENDING).update(status=models.OAuthLinkStatus.COMPLETED):
+            raise MailError("Unknown or already used link state.", models.MailErrorCode.INVALID_STATE)
+        if link.account is not None:
+            account = link.account
+            if account.email_address.lower() != address:
+                raise MailError(f"This mailbox is {account.email_address}, but {address} was approved.", models.MailErrorCode.INVALID_STATE)
+            for key, value in token_fields.items():
+                setattr(account, key, value)
+            account.status, account.last_error, account.last_error_code = models.MailAccountStatus.ACTIVE, None, None
+            account.save()
+        else:
+            account = models.MailAccount.objects.filter(organization=organization, creator=user, email_address=address, protocol=link.protocol).first()
+            if account is None:
+                account = models.MailAccount(organization=organization, creator=user, email_address=address, protocol=link.protocol)
+            account.name = link.name or account.name or address
+            account.display_name = account.display_name or display_name
+            account.provider = link.provider
+            account.status = models.MailAccountStatus.ACTIVE
+            account.incoming_host, account.incoming_port, account.incoming_security = host, port, security
+            account.smtp_host, account.smtp_port, account.smtp_security = smtp_host, smtp_port, smtp_security
+            account.username = address
+            account.auth_method = models.AuthMethod.XOAUTH2
+            account.save_sent_copy = False  # Gmail and Microsoft file sent mail themselves
+            account.last_error = account.last_error_code = None
+            for key, value in token_fields.items():
+                setattr(account, key, value)
+            account.save()
+        models.OAuthLink.objects.filter(pk=link.pk).update(account=account)
+    return account
