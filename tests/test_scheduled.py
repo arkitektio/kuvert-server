@@ -4,13 +4,13 @@ import pytest
 
 from mail import models
 from mail.scheduled import purge_orphaned_stores, reembed_stale, sync_all_mailboxes
-from rekuest_service import registered
+from kuvert_server.service import service
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def test_actions_are_registered_with_defaults(settings):
-    actions = registered()
+    actions = service.actions
     assert {"sync_all_mailboxes", "reembed_stale", "purge_orphaned_stores"} <= set(actions)
     assert actions["sync_all_mailboxes"].default_interval == 300
 

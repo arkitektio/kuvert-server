@@ -44,7 +44,7 @@ a process-default service; they remain for existing callers.
 
 from rekuest_service import trust
 from rekuest_service.registry import action, declare_signal, declared_signals, registered
-from rekuest_service.service import Service, Signal
+from rekuest_service.service import Service, Signal, organization_of
 from rekuest_service.signals import emit
 
-__all__ = ["Service", "Signal", "action", "declare_signal", "declared_signals", "emit", "registered", "trust"]
+__all__ = ["Service", "Signal", "action", "declare_signal", "declared_signals", "emit", "organization_of", "registered", "trust"]

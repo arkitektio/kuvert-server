@@ -31,7 +31,6 @@ from __future__ import annotations
 import datetime
 import inspect
 import logging
-import threading
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -73,6 +72,21 @@ class SignalDeclaration:
 
     def manifest(self) -> dict[str, Any]:
         return {"identifier": self.identifier, "kinds": list(self.kinds), "descriptors": list(self.descriptors), "description": self.description}
+
+
+def organization_of(path: str = "organization") -> Callable[[Any], str | None]:
+    """An ``organization=`` for :meth:`Service.model_signal`: follow ``path`` (dotted, e.g.
+    ``"room.organization"``) from the object to its organization and take its slug."""
+    steps = path.split(".")
+
+    def resolve(obj: Any) -> str | None:
+        for step in steps:
+            obj = getattr(obj, step, None)
+            if obj is None:
+                return None
+        return getattr(obj, "slug", None)
+
+    return resolve
 
 
 def _docstring_parts(function: Callable[..., Any]) -> tuple[str | None, str | None]:
@@ -249,8 +263,74 @@ class Service:
         config = getattr(settings, "REKUEST_HOOK", None) or {}
         return config.get("SERVICE") or self.name
 
-    def _emit(self, kind: str, identifier: str, object: Any, *, organization: str, descriptors: dict[str, Any] | None) -> None:
-        from rekuest_service.signals import current_provenance_token, send
+    def model_signal(
+        self,
+        model: Any,
+        identifier: str,
+        *,
+        organization: Callable[[Any], str | None],
+        kinds: Iterable[str] = KINDS,
+        descriptors: Callable[[Any], dict[str, Any]] | None = None,
+        descriptor_keys: Iterable[str] = (),
+        when: Callable[[Any, str], bool] | None = None,
+        description: str | None = None,
+    ) -> Signal:
+        """Declare a signal for every save and delete of ``model`` — no ``emit`` in the mutations.
+
+        A save that creates the row is CREATED, any other save UPDATED (so ``update_or_create``
+        upserts are told apart for free), a delete DELETED; kinds not listed are not sent.
+        ``organization(obj)`` names the organization (its slug); ``descriptors(obj)`` returns the
+        flat descriptor dict, whose keys ``descriptor_keys`` declares; ``when(obj, kind)`` may veto
+        (privacy, half-written rows).
+
+        For saves, ``organization`` and ``descriptors`` run after the transaction commits, so they
+        see everything the request wrote after the row itself — provided it wrote them in one
+        transaction: outside one, "after the commit" is right after that save. A mutation whose
+        descriptors depend on rows written after the object belongs in ``transaction.atomic``.
+        For deletes they run at delete time, while the row still exists. The provenance token is always read at save time. A
+        raising callable costs one warning: saving never fails because of a signal. Bulk writes
+        (``bulk_create``, ``update()``) send nothing — Django sends no ``post_save`` for them.
+        """
+        from django.db.models.signals import post_delete, post_save
+
+        handle = self.signal(identifier, kinds=kinds, descriptors=descriptor_keys, description=description)
+        uid = f"rekuest_service:{self.name}:{identifier}"
+
+        def on_save(sender: Any, instance: Any, created: bool = False, raw: bool = False, **_: Any) -> None:
+            if not raw:  # fixtures being loaded are not events
+                self._emit_for(handle, instance, "CREATED" if created else "UPDATED", organization, descriptors, when, lazy=True)
+
+        def on_delete(sender: Any, instance: Any, **_: Any) -> None:
+            self._emit_for(handle, instance, "DELETED", organization, descriptors, when, lazy=False)
+
+        post_save.connect(on_save, sender=model, weak=False, dispatch_uid=f"{uid}:save")
+        post_delete.connect(on_delete, sender=model, weak=False, dispatch_uid=f"{uid}:delete")
+        return handle
+
+    def _emit_for(self, handle: Signal, instance: Any, kind: str, organization: Callable, descriptors: Callable | None, when: Callable | None, *, lazy: bool) -> None:
+        if kind not in handle.declaration.kinds or instance.pk is None or self.config() is None:
+            return  # not announced, or nowhere to announce it: a save costs nothing extra
+        try:
+            if when is not None and not when(instance, kind):
+                return
+        except Exception as error:  # noqa: BLE001
+            logger.warning("Signal %s: `when` failed for %s: %s", handle.identifier, instance.pk, error)
+            return
+        if lazy:
+            self._emit(kind, handle.identifier, instance.pk, organization=lambda: organization(instance), descriptors=(lambda: descriptors(instance)) if descriptors else None)
+            return
+        try:
+            org = organization(instance)
+            values = descriptors(instance) if descriptors else None
+        except Exception as error:  # noqa: BLE001
+            logger.warning("Signal %s: could not describe %s %s: %s", handle.identifier, kind, instance.pk, error)
+            return
+        self._emit(kind, handle.identifier, instance.pk, organization=org, descriptors=values)
+
+    def _emit(self, kind: str, identifier: str, object: Any, *, organization: str | Callable[[], str | None], descriptors: dict[str, Any] | Callable[[], dict[str, Any]] | None) -> None:
+        """Queue one signal for after the commit. ``organization``/``descriptors`` may be callables,
+        evaluated then (see :meth:`model_signal`)."""
+        from rekuest_service.signals import current_provenance_token, enqueue
 
         config = self.config()
         service = self.service_name()
@@ -259,20 +339,31 @@ class Service:
         if identifier not in self._signals and (identifier, kind) not in self._warned_undeclared:
             self._warned_undeclared.add((identifier, kind))
             logger.warning("Emitting %s %s without declaring it (service.signal); triggers cannot be checked against it", kind, identifier)
-        message = {
+        base = {
             "id": uuid.uuid4().hex,
             "kind": kind,
             "identifier": identifier,
             "object": str(object),
-            "organization": organization,
-            "descriptors": descriptors or {},
             # Read now, while the request that caused the object is still the current context.
             "provenance": current_provenance_token(),
             "occurred_at": datetime.datetime.now(datetime.UTC).isoformat(),
         }
         issuer = self.signing_identifier()
         key = self.signing_key()
-        transaction.on_commit(lambda: threading.Thread(target=send, args=(config, service, issuer, message, key), name=f"rekuest-signal-{message['id']}", daemon=True).start())
+
+        def dispatch() -> None:
+            try:
+                org = organization() if callable(organization) else organization
+                values = descriptors() if callable(descriptors) else descriptors
+            except Exception as error:  # noqa: BLE001  a signal never breaks the write it describes
+                logger.warning("Signal %s: could not describe %s %s: %s", identifier, kind, object, error)
+                return
+            if not org:
+                logger.debug("Signal %s %s %s has no organization; not sent", kind, identifier, object)
+                return
+            enqueue(config, service, issuer, {**base, "organization": org, "descriptors": values or {}}, key)
+
+        transaction.on_commit(dispatch)
 
     def __repr__(self) -> str:
         return f"Service({self.name!r}, actions={list(self._actions)}, signals={list(self._signals)})"

@@ -18,7 +18,7 @@ from django.conf import settings
 from mail import models
 from mail.errors import AlreadySyncing, SyncTooSoon
 from mail.sync import sync_account
-from rekuest_service import action
+from kuvert_server.service import service
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +27,8 @@ def _active_accounts() -> list[int]:
     return list(models.MailAccount.objects.filter(status=models.MailAccountStatus.ACTIVE).order_by("last_synced_at", "id").values_list("id", flat=True))
 
 
-@action(
-    "sync_all_mailboxes",
+@service.action(
+    interface="sync_all_mailboxes",
     name="Sync all mailboxes",
     description="Sync every active mailbox once: new mail, flags, deletions, and the next part of a backfill.",
     default_interval=settings.KUVERT_SYNC.get("scheduled_every_seconds"),
@@ -62,8 +62,8 @@ def _reembed_interval() -> int | None:
     return embeddings.get("SWEEP_INTERVAL") if embeddings.get("ENABLED", True) else None
 
 
-@action(
-    "reembed_stale",
+@service.action(
+    interface="reembed_stale",
     name="Re-embed stale messages",
     description="Embed messages whose vector is missing or came from another model (after a model change, or when the model was unavailable at sync time).",
     default_interval=_reembed_interval(),
@@ -72,8 +72,8 @@ async def reembed_stale() -> dict:
     return {"reembedded": await sync_to_async(_reembed)()}
 
 
-@action(
-    "purge_orphaned_stores",
+@service.action(
+    interface="purge_orphaned_stores",
     name="Purge orphaned files",
     description="Delete stored raw messages and attachments whose messages are gone for more than a day.",
     default_interval=6 * 3600 if getattr(settings, "DATALAYER", None) else None,
