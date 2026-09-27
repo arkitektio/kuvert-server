@@ -123,8 +123,14 @@ class Signal:
 class Service:
     """One service's declaration towards its hub's rekuest: what it offers, what it announces."""
 
-    def __init__(self, name: str | None, *, description: str | None = None) -> None:
+    def __init__(self, name: str | None, *, identifier: str | None = None, description: str | None = None, key: Any = None) -> None:
         self.name = name
+        #: The key this service signs with; None (the rule) = this instance's key
+        #: (``settings.INSTANCE``). Set when one process plays several services (tests).
+        self.key = key
+        #: The fakts identifier this instance signs as (``iss``) — what the coord's trust bundle
+        #: lists its key under. Defaults to ``live.arkitekt.<name>``.
+        self.identifier = identifier or (f"live.arkitekt.{name}" if name else None)
         self.description = description
         self._actions: dict[str, Action] = {}
         self._signals: dict[str, Signal] = {}
@@ -194,6 +200,7 @@ class Service:
     def manifest(self) -> dict[str, Any]:
         return {
             "service": self.service_name(),
+            "identifier": self.signing_identifier(),
             "description": self.description,
             "actions": [a.manifest() for a in self._actions.values()],
             "signals": [s.declaration.manifest() for s in self._signals.values()],
@@ -209,11 +216,34 @@ class Service:
     # --- configuration and sending -------------------------------------------------------
 
     def config(self) -> dict[str, Any] | None:
-        """``settings.REKUEST_HOOK`` when it can reach rekuest, else None (everything is then a no-op)."""
+        """``settings.REKUEST_HOOK`` when it can reach rekuest — its URL set and an instance key
+        configured (``settings.INSTANCE``) — else None, and everything is then a no-op."""
         config = getattr(settings, "REKUEST_HOOK", None)
-        if not config or not config.get("SECRET") or not config.get("REKUEST_URL"):
+        if not config or not config.get("REKUEST_URL") or self.signing_key() is None:
             return None
         return config
+
+    def signing_key(self) -> Any:
+        """What this service signs with: its own ``key``, else this instance's key."""
+        from rekuest_service.trust import instance_key
+
+        return self.key if self.key is not None else instance_key()
+
+    def signing_identifier(self) -> str | None:
+        """What this service signs as: ``settings.REKUEST_HOOK["IDENTIFIER"]``, the declared
+        identifier, or — for a service declared without a name (the default service) —
+        ``live.arkitekt.<the configured service name>``."""
+        config = getattr(settings, "REKUEST_HOOK", None) or {}
+        if config.get("IDENTIFIER") or self.identifier:
+            return config.get("IDENTIFIER") or self.identifier
+        name = self.service_name()
+        return f"live.arkitekt.{name}" if name else None
+
+    @staticmethod
+    def rekuest_identifier() -> str:
+        """Whom rekuest's requests must come from (``settings.REKUEST_HOOK["REKUEST_IDENTIFIER"]``)."""
+        config = getattr(settings, "REKUEST_HOOK", None) or {}
+        return config.get("REKUEST_IDENTIFIER") or "live.arkitekt.rekuest"
 
     def service_name(self) -> str | None:
         config = getattr(settings, "REKUEST_HOOK", None) or {}
@@ -240,7 +270,9 @@ class Service:
             "provenance": current_provenance_token(),
             "occurred_at": datetime.datetime.now(datetime.UTC).isoformat(),
         }
-        transaction.on_commit(lambda: threading.Thread(target=send, args=(config, service, message), name=f"rekuest-signal-{message['id']}", daemon=True).start())
+        issuer = self.signing_identifier()
+        key = self.signing_key()
+        transaction.on_commit(lambda: threading.Thread(target=send, args=(config, service, issuer, message, key), name=f"rekuest-signal-{message['id']}", daemon=True).start())
 
     def __repr__(self) -> str:
         return f"Service({self.name!r}, actions={list(self._actions)}, signals={list(self._signals)})"

@@ -18,6 +18,8 @@ from mail import enums, models
         (enums.FolderRole, models.FolderRole),
         (enums.OutgoingStatus, models.OutgoingStatus),
         (enums.OAuthLinkStatus, models.OAuthLinkStatus),
+        (enums.TaskStatus, models.TaskStatus),
+        (enums.TaskLinkSource, models.TaskLinkSource),
     ],
 )
 def test_enums_match_choices(enum, choices):

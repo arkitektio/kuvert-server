@@ -118,9 +118,7 @@ async def test_uidvalidity_change_resyncs_the_folder(mailbox, greenmail, sync):
     old_id = (await models.Message.objects.aget(folder=folder)).id
 
     with greenmail.imap(box["address"]) as imap:
-        # A new folder under the old name has a new UIDVALIDITY (GreenMail's DELETE drops the connection).
-        imap.rename_folder("Box", "Old")
-        imap.create_folder("Box")
+        greenmail.recreate_folder(imap, "Box", "Old")
         imap.append("Box", b"Subject: one\r\nMessage-ID: <one@x>\r\n\r\n1\r\n")
         imap.append("Box", b"Subject: two\r\nMessage-ID: <two@x>\r\n\r\n2\r\n")
     await sync(box["id"])

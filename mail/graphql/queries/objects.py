@@ -11,7 +11,7 @@ from mail.graphql.utils import get_or_404
 from mail.oauth.providers import configured_providers
 from mail.scoping import for_org
 
-__all__ = ["mail_account", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "oauth_providers", "threads_count", "messages_count"]
+__all__ = ["mail_account", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "oauth_providers", "threads_count", "messages_count", "task", "task_list", "tasks_count"]
 
 
 def threads_count(info: Info, filters: Optional[filters.ThreadFilter] = None) -> int:
@@ -82,3 +82,19 @@ def mail_presets(info: Info, address: Optional[str] = strawberry.UNSET) -> list[
 def oauth_providers(info: Info) -> list[enums.Provider]:
     """Providers this deployment can link through OAuth."""
     return [enums.Provider(p) for p in configured_providers()]
+
+
+def task(info: Info, id: strawberry.ID) -> types.Task:
+    return get_or_404(models.Task, info, id)  # type: ignore[return-value]
+
+
+def task_list(info: Info, id: strawberry.ID) -> types.TaskList:
+    return get_or_404(models.TaskList, info, id)  # type: ignore[return-value]
+
+
+def tasks_count(info: Info, filters: Optional[filters.TaskFilter] = None) -> int:
+    """How many of the caller's tasks match (the same filters as `tasks`)."""
+    rows = for_org(models.Task, info)
+    if filters is not None:
+        rows = strawberry_django.filters.apply(filters, rows, info)
+    return rows.count()

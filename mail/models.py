@@ -9,8 +9,9 @@ A message's identity on the server is (folder, UIDVALIDITY, UID) for IMAP and (U
 ``message_id`` (the RFC 5322 header) is what threads and cross-folder copies are matched by.
 """
 
-from authentikate.models import Organization, User
+from authentikate.models import Client, Organization, User
 from django.contrib.postgres.fields import ArrayField
+from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 from koherent.fields import ProvenanceField
 
@@ -109,6 +110,21 @@ class OutgoingStatus(models.TextChoices):
     SENDING = "SENDING", "Being handed to the SMTP server"
     SENT = "SENT", "Accepted by the SMTP server"
     FAILED = "FAILED", "Refused or not delivered to the SMTP server"
+
+
+class TaskStatus(models.TextChoices):
+    """Where a task is."""
+
+    OPEN = "OPEN", "To do"
+    DONE = "DONE", "Done"
+    DISMISSED = "DISMISSED", "Dropped without doing it"
+
+
+class TaskLinkSource(models.TextChoices):
+    """Who put a thread into a task."""
+
+    USER = "USER", "A person, by hand"
+    APP = "APP", "An app that sorts mail"
 
 
 class OAuthLinkStatus(models.TextChoices):
@@ -210,9 +226,10 @@ class Thread(models.Model):
     subject = models.TextField(blank=True, default="", help_text="The subject without Re:/Fwd: prefixes.")
     last_message_at = models.DateTimeField(null=True, blank=True, help_text="The date of the newest message.")
     message_count = models.IntegerField(default=0, help_text="How many messages are in the conversation.")
+    message_ids = ArrayField(models.CharField(max_length=998), default=list, blank=True, help_text="Every Message-ID the conversation has held. A message that comes back (moved, re-read after a UIDVALIDITY change) rejoins the thread by it, so tasks keep their threads.")
 
     class Meta:
-        indexes = [models.Index(fields=["account", "-last_message_at"], name="mail_thread_recent")]
+        indexes = [models.Index(fields=["account", "-last_message_at"], name="mail_thread_recent"), GinIndex(fields=["message_ids"], name="mail_thread_mids")]
 
 
 class Message(EmbeddedDescriptionMixin, models.Model):
@@ -334,3 +351,64 @@ class OAuthLink(models.Model):
     expires_at = models.DateTimeField(help_text="A link not completed by then is refused.")
     created_at = models.DateTimeField(auto_now_add=True, help_text="When the link was started.")
 
+
+
+class TaskList(models.Model):
+    """A member's list of tasks (an Inbox "bundle" or project). Personal: only its owner sees it."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="mail_task_lists", help_text="The organization it belongs to.")
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name="mail_task_lists", help_text="The member whose list it is.")
+    name = models.CharField(max_length=200, help_text="The list's name.")
+    color = models.CharField(max_length=20, blank=True, default="", help_text="A display color (e.g. #4f86f7).")
+    position = models.FloatField(default=0, help_text="Where the list sorts among the owner's lists.")
+    created_at = models.DateTimeField(auto_now_add=True, help_text="When the list was created.")
+    provenance = ProvenanceField()
+
+    class Meta:
+        ordering = ["position", "id"]
+
+
+class Task(models.Model):
+    """Something to do, made of mail threads (from any mailbox its owner can see). Personal: only its owner sees it."""
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="mail_tasks", help_text="The organization it belongs to.")
+    owner = models.ForeignKey(User, on_delete=models.CASCADE, related_name="mail_tasks", help_text="The member whose task it is.")
+    list = models.ForeignKey(TaskList, on_delete=models.SET_NULL, null=True, blank=True, related_name="tasks", help_text="The list it is on, if any.")
+    title = models.CharField(max_length=500, help_text="What to do.")
+    notes = models.TextField(blank=True, default="", help_text="Free notes.")
+    status = models.CharField(max_length=10, choices=TaskStatus.choices, default=TaskStatus.OPEN, help_text="Where the task is.")
+    pinned = models.BooleanField(default=False, help_text="Pinned to the top.")
+    due_at = models.DateTimeField(null=True, blank=True, help_text="When it is due.")
+    snoozed_until = models.DateTimeField(null=True, blank=True, help_text="Hidden from the active view until then.")
+    position = models.FloatField(default=0, help_text="Where the task sorts in its list.")
+    external_key = models.CharField(max_length=500, null=True, blank=True, help_text="An app's own key for the task: `upsertTask` finds the task by it, so sorting again updates instead of duplicating.")
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", help_text="The app that created the task, if one did.")
+    threads = models.ManyToManyField(Thread, through="TaskThread", related_name="tasks", help_text="The conversations the task is about.")
+    completed_at = models.DateTimeField(null=True, blank=True, help_text="When it was marked DONE.")
+    created_at = models.DateTimeField(auto_now_add=True, help_text="When the task was created.")
+    updated_at = models.DateTimeField(auto_now=True, help_text="When the task last changed.")
+    provenance = ProvenanceField(excluded_fields=["updated_at"])
+
+    class Meta:
+        ordering = ["-pinned", "position", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "owner", "external_key"], condition=models.Q(external_key__isnull=False), name="mail_task_external_key"),
+        ]
+        indexes = [models.Index(fields=["owner", "status"], name="mail_task_owner_status")]
+
+
+class TaskThread(models.Model):
+    """A thread in a task: who put it there, and (for an app) how sure it was and why."""
+
+    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="links", help_text="The task.")
+    thread = models.ForeignKey(Thread, on_delete=models.CASCADE, related_name="task_links", help_text="The conversation.")
+    source = models.CharField(max_length=10, choices=TaskLinkSource.choices, default=TaskLinkSource.USER, help_text="Who put the thread into the task.")
+    client = models.ForeignKey(Client, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", help_text="The app the request came from.")
+    confidence = models.FloatField(null=True, blank=True, help_text="An app's confidence (0–1) that the thread belongs here.")
+    reason = models.TextField(blank=True, default="", help_text="Why the thread belongs here, in words.")
+    position = models.FloatField(default=0, help_text="Where the thread sorts within the task.")
+    created_at = models.DateTimeField(auto_now_add=True, help_text="When the thread was put into the task.")
+
+    class Meta:
+        ordering = ["position", "id"]
+        constraints = [models.UniqueConstraint(fields=["task", "thread"], name="mail_taskthread_unique")]

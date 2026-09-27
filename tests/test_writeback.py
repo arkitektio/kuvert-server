@@ -70,8 +70,7 @@ async def test_delete_moves_to_trash_then_expunges(box_with_mail, aexecute, gree
 async def test_a_server_failure_changes_nothing_locally(box_with_mail, aexecute, greenmail):
     """The folder was replaced on the server (new UIDVALIDITY): the change is refused and the row stays as it was."""
     with greenmail.imap(box_with_mail["address"]) as imap:
-        imap.rename_folder("Archive", "Archive2")
-        imap.create_folder("Archive")
+        greenmail.recreate_folder(imap, "Archive", "Archive2")
         imap.append("Archive", b"Subject: A\r\nMessage-ID: <a@x>\r\n\r\na\r\n")
     moved = await aexecute(
         'mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id } }',
@@ -82,8 +81,7 @@ async def test_a_server_failure_changes_nothing_locally(box_with_mail, aexecute,
     # ...but touching a message whose folder's UIDVALIDITY moved on is refused.
     archived = await models.Message.objects.aget(account_id=box_with_mail["id"], folder__path="Archive", subject="One")
     with greenmail.imap(box_with_mail["address"]) as imap:
-        imap.rename_folder("Archive", "Archive3")
-        imap.create_folder("Archive")
+        greenmail.recreate_folder(imap, "Archive", "Archive3")
     result = await aexecute('mutation($ids: [ID!]!) { setMessageFlags(input: {messages: $ids, add: ["\\\\Flagged"]}) { id } }', {"ids": [str(archived.id)]}, allow_errors=True)
     assert result.errors[0].extensions["code"] == "SERVER_ERROR"
     await archived.arefresh_from_db()

@@ -115,6 +115,30 @@ the schema and never written to history rows.
 - A delete moves messages to Trash. It expunges them when they are already in Trash, or when
   `permanent` is set.
 
+## Tasks
+
+Mail treated as tasks, in the style of Google Inbox. A **task** holds conversations
+(threads) from any mailbox its owner can see. A conversation can be in several tasks. Tasks and
+**task lists** are personal: only their owner sees them.
+
+- An app that sorts mail calls `upsertTask(input: {externalKey, title, threads, link: {source:
+  APP, confidence, reason}})`. The `externalKey` is the app's own key, so sorting again updates the
+  same task and adds conversations instead of duplicating. Every link records who made it (APP or
+  USER, plus the app's client id), how sure the app was, and why.
+- `tasks(filters: {active: true})` is the Inbox view: OPEN tasks that aren't snoozed. You can also
+  filter by `status`, `pinned`, `snoozed`, `list`/`noList`, `dueBefore`, `thread`, `externalKey`
+  and `search`. `setTaskStatus`, `snoozeTasks`, `updateTask` (pin, due date, list, position),
+  `linkThreads` and `unlinkThreads` change tasks.
+- `Thread.tasks` lists the caller's tasks for a conversation. `threads(filters: {hasTask: false})`
+  hides mail that's already in an open task, and `threads(filters: {task})` lists a task's
+  conversations.
+- A task's status is independent of its mail. Finishing a task doesn't archive or mark anything
+  read; an app can do that with the mail mutations.
+- Conversations keep their identity. A thread remembers every Message-ID it has held, so messages
+  that are moved, or read again after a UIDVALIDITY change, return to the same thread. A thread a
+  task links is never deleted, even when it's empty. A link to a mailbox the owner can no longer
+  see drops out of every read, and comes back if the mailbox is shared again.
+
 ## Sending
 
 `sendMessage(input: {account, to, cc, bcc, subject, text, html, inReplyTo, attachments})` sends

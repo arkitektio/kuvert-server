@@ -94,3 +94,16 @@ class OutgoingStatus(str, Enum):
 class OAuthLinkStatus(str, Enum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
+
+
+@strawberry.enum(description="Where a task is. OPEN: To do; DONE: Done; DISMISSED: Dropped without doing it.")
+class TaskStatus(str, Enum):
+    OPEN = "OPEN"
+    DONE = "DONE"
+    DISMISSED = "DISMISSED"
+
+
+@strawberry.enum(description="Who put a thread into a task. USER: A person, by hand; APP: An app that sorts mail.")
+class TaskLinkSource(str, Enum):
+    USER = "USER"
+    APP = "APP"

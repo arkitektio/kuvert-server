@@ -1,12 +1,15 @@
 """Organization and mailbox-visibility scoping.
 
-Two filters apply to every read and write, in this order:
+Up to three filters apply to every read and write, in this order:
 
 1. **Organization** (as in bank): a row belongs to the request's organization, through its own
    ``organization`` column or a chain of required FKs (:func:`organization_path`).
 2. **Visibility**: a row that belongs to a mailbox (:class:`~mail.models.MailAccount`) is only
    visible to the members who may see that mailbox (:func:`visible_accounts_q`): its creator,
    everyone for an ORGANIZATION mailbox, and the members it is shared with for a SHARED one.
+3. **Owner**: a row that belongs to a member personally (a task, a task list: an ``owner``) is
+   only visible to that member. A task's link to a thread passes 2 *and* 3: the owner must still
+   see the thread's mailbox.
 
 List fields are scoped through ``OrgScoped.get_queryset`` on the GraphQL types; everything that
 fetches a row by id (mutations, single-object queries, subscriptions) goes through
@@ -68,6 +71,12 @@ def account_path(model: type[django_models.Model]) -> str | None:
     return _find_path(model, _MAX_PATH_DEPTH, "account", lambda m: m is MailAccount)
 
 
+@cache
+def owner_path(model: type[django_models.Model]) -> str | None:
+    """The ORM lookup path from ``model`` to the member it personally belongs to, if any."""
+    return _find_path(model, _MAX_PATH_DEPTH, "owner", lambda m: False)
+
+
 def visible_accounts_q(user, prefix: str = "") -> Q:  # noqa: ANN001 - authentikate User
     """The mailboxes ``user`` may see (the organization is filtered separately)."""
     from mail.models import Visibility
@@ -96,6 +105,9 @@ def scope_to(queryset: django_models.QuerySet, organization, user) -> django_mod
         # never duplicated when several conditions hold.
         visible = MailAccount.objects.filter(visible_accounts_q(user)).values("id")
         queryset = queryset.filter(**{f"{to_account}__in" if to_account else "id__in": visible})
+    to_owner = owner_path(model)
+    if to_owner is not None:
+        queryset = queryset.filter(**{to_owner: user})
     return queryset
 
 

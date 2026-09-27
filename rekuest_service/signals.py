@@ -21,10 +21,11 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
-from rekuest_service import signing
+from rekuest_service import trust
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,18 @@ def emit(kind: str, identifier: str, object: Any, *, organization: str, descript
         default_service._emit(kind, identifier, object, organization=organization, descriptors=descriptors)
 
 
-def send(config: dict[str, Any], service: str, message: dict[str, Any]) -> bool:
-    """POST one signal, signed for ``signal:<service>``. Never raises."""
-    body = json.dumps(message).encode("utf-8")
+def send(config: dict[str, Any], service: str, issuer: str, message: dict[str, Any], key: Any = None) -> bool:
+    """POST one signal to rekuest's signal intake, signed with this instance's key. Never raises."""
+    from rekuest_service.service import Service
+
+    body = json.dumps(message).encode()
     url = f"{config['REKUEST_URL'].rstrip('/')}/agi/signal/{service}"
-    headers = {"Content-Type": "application/json", signing.SIGNATURE_V1_HEADER: signing.sign(config["SECRET"], f"signal:{service}", body)}
+    try:
+        authorization = trust.sign("POST", urlparse(url).path, body, issuer=issuer, audience=Service.rekuest_identifier(), key=key)
+    except trust.TrustError as error:
+        logger.warning("Could not sign a signal: %s", error)
+        return False
+    headers = {"Content-Type": "application/json", "Authorization": authorization}
     try:
         response = httpx.post(url, content=body, headers=headers, timeout=_TIMEOUT)
         response.raise_for_status()

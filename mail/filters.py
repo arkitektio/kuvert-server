@@ -5,10 +5,12 @@
 """
 
 import datetime
+import typing
 
 import strawberry
 import strawberry_django
 from django.db.models import Q, QuerySet
+from django.utils import timezone
 from kante.types import Info
 from strawberry import auto
 
@@ -220,6 +222,17 @@ class ThreadFilter:
         q = _with_message(prefix, models.Message.objects.filter(has_attachments=True))
         return q if value else ~q
 
+    @strawberry_django.filter_field
+    def task(self, info: Info, value: strawberry.ID, prefix: str) -> Q:
+        """Only conversations in this task (of the caller's)."""
+        return Q(**{f"{prefix}id__in": models.TaskThread.objects.filter(task_id=value, task__owner=info.context.request.user).values("thread_id")})
+
+    @strawberry_django.filter_field
+    def has_task(self, info: Info, value: bool, prefix: str) -> Q:
+        """Only conversations in (not in) any of the caller's open tasks -- e.g. hide what is already sorted."""
+        q = Q(**{f"{prefix}id__in": models.TaskThread.objects.filter(task__owner=info.context.request.user, task__status=models.TaskStatus.OPEN).values("thread_id")})
+        return q if value else ~q
+
     @strawberry_django.filter_field(description="Only conversations with a message matching the text: the same substring and meaning search as `messages(filters: {search})`.")
     def search(self, info: Info, queryset: QuerySet, value: str, prefix: str) -> Q:
         # Only the messages of the conversations still in play (already scoped to what the caller sees).
@@ -249,3 +262,91 @@ class OutgoingMessageFilter:
     def status(self, value: enums.OutgoingStatus, prefix: str) -> Q:
         """Only mail in this status."""
         return Q(**{f"{prefix}status": value.value})
+
+
+@strawberry_django.filter_type(models.TaskList)
+class TaskListFilter:
+    """Filtering options for task lists."""
+
+    @strawberry_django.filter_field
+    def ids(self, value: list[strawberry.ID], prefix: str) -> Q:
+        """Only these lists."""
+        return _ids(prefix, "id", value)
+
+    @strawberry_django.filter_field
+    def search(self, value: str, prefix: str) -> Q:
+        """The name contains this (case-insensitive)."""
+        return Q(**{f"{prefix}name__icontains": value})
+
+
+@strawberry_django.filter_type(models.Task)
+class TaskFilter:
+    """Filtering options for tasks."""
+
+    @strawberry_django.filter_field
+    def ids(self, value: typing.List[strawberry.ID], prefix: str) -> Q:
+        """Only these tasks."""
+        return _ids(prefix, "id", value)
+
+    @strawberry_django.filter_field
+    def list(self, value: strawberry.ID, prefix: str) -> Q:
+        """Only tasks on this list."""
+        return Q(**{f"{prefix}list_id": value})
+
+    @strawberry_django.filter_field
+    def no_list(self, value: bool, prefix: str) -> Q:
+        """Only tasks on no list (false: only tasks on some list)."""
+        return Q(**{f"{prefix}list__isnull": value})
+
+    @strawberry_django.filter_field
+    def status(self, value: enums.TaskStatus, prefix: str) -> Q:
+        """Only tasks in this status."""
+        return Q(**{f"{prefix}status": value.value})
+
+    @strawberry_django.filter_field
+    def pinned(self, value: bool, prefix: str) -> Q:
+        """Only pinned (unpinned) tasks."""
+        return Q(**{f"{prefix}pinned": value})
+
+    @strawberry_django.filter_field
+    def snoozed(self, value: bool, prefix: str) -> Q:
+        """Only tasks snoozed right now (or not)."""
+        q = Q(**{f"{prefix}snoozed_until__gt": timezone.now()})
+        return q if value else ~q
+
+    @strawberry_django.filter_field
+    def active(self, value: bool, prefix: str) -> Q:
+        """OPEN and not snoozed right now: the Inbox view (false: everything else)."""
+        q = Q(**{f"{prefix}status": models.TaskStatus.OPEN}) & ~Q(**{f"{prefix}snoozed_until__gt": timezone.now()})
+        return q if value else ~q
+
+    @strawberry_django.filter_field
+    def due_before(self, value: datetime.datetime, prefix: str) -> Q:
+        """Due before this."""
+        return Q(**{f"{prefix}due_at__lt": value})
+
+    @strawberry_django.filter_field
+    def thread(self, value: strawberry.ID, prefix: str) -> Q:
+        """Only tasks that contain this conversation."""
+        return Q(**{f"{prefix}links__thread_id": value})
+
+    @strawberry_django.filter_field
+    def external_key(self, value: str, prefix: str) -> Q:
+        """The task an app filed under this key."""
+        return Q(**{f"{prefix}external_key": value})
+
+    @strawberry_django.filter_field
+    def search(self, value: str, prefix: str) -> Q:
+        """Title or notes contain this (case-insensitive)."""
+        return Q(**{f"{prefix}title__icontains": value}) | Q(**{f"{prefix}notes__icontains": value})
+
+
+@strawberry_django.order_type(models.Task)
+class TaskOrder:
+    """Ordering options for tasks."""
+
+    position: auto
+    due_at: auto
+    created_at: auto
+    updated_at: auto
+    title: auto

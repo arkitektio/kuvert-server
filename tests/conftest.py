@@ -227,6 +227,20 @@ class GreenMail:
         client.login(address, password)
         return client
 
+    @staticmethod
+    def recreate_folder(imap: IMAPClient, name: str, aside: str) -> None:
+        """Move ``name`` aside and create a new folder under the name, with a different UIDVALIDITY.
+
+        GreenMail's UIDVALIDITY is the creation time in seconds (and its DELETE drops the
+        connection), so a folder recreated within the same second would look unchanged.
+        """
+        old = imap.folder_status(name, [b"UIDVALIDITY"])[b"UIDVALIDITY"]
+        imap.rename_folder(name, aside)
+        while int(time.time()) <= old:
+            time.sleep(0.05)
+        imap.create_folder(name)
+        assert imap.folder_status(name, [b"UIDVALIDITY"])[b"UIDVALIDITY"] != old
+
     def wait_for(self, address: str, count: int, folder: str = "INBOX", timeout: float = 10) -> None:
         """Until ``folder`` of ``address`` holds ``count`` messages (delivery is asynchronous)."""
         deadline = time.monotonic() + timeout

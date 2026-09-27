@@ -35,6 +35,9 @@ __all__ = [
     "SyncResult",
     "MailboxSyncEvent",
     "DeleteResult",
+    "TaskList",
+    "Task",
+    "TaskThread",
 ]
 
 
@@ -266,6 +269,12 @@ class Thread(OrgScoped):
     def has_attachments(self, info: Info) -> bool:
         return _thread_messages(self, info).filter(has_attachments=True).exists()
 
+    @strawberry_django.field(description="The caller's tasks this conversation is in.")
+    def tasks(self, info: Info) -> List["Task"]:
+        from mail.scoping import scope_queryset
+
+        return list(scope_queryset(models.Task.objects.filter(links__thread_id=self.id), info))  # type: ignore[attr-defined,return-value]
+
 
 @strawberry.type(description="A recipient the SMTP server refused.")
 class RefusedRecipient:
@@ -362,3 +371,88 @@ class MailboxSyncEvent:
 @strawberry.type(description="What a delete did.")
 class DeleteResult:
     deleted: int = strawberry.field(description="Messages deleted or moved to Trash.")
+
+
+def _visible_links(task: object, info: Info):  # noqa: ANN202
+    """The task's links whose thread the caller can still see."""
+    from mail.scoping import scope_queryset
+
+    return scope_queryset(models.TaskThread.objects.filter(task_id=task.id), info)  # type: ignore[attr-defined]
+
+
+@kante.django_type(models.TaskList, pagination=True, filters=filters.TaskListFilter, description="A member's list of tasks (an Inbox bundle or project). Only its owner sees it.")
+class TaskList(OrgScoped):
+    id: strawberry.ID
+    name: str
+    color: str
+    position: float
+    created_at: datetime.datetime
+    tasks: List["Task"] = strawberry_django.field(pagination=True, filters=filters.TaskFilter, ordering=filters.TaskOrder, description="The tasks on the list.")
+
+    @strawberry_django.field(description="How many tasks on the list are OPEN.")
+    def open_count(self) -> int:
+        return self.tasks.filter(status=models.TaskStatus.OPEN).count()  # type: ignore[attr-defined]
+
+
+@kante.django_type(models.TaskThread, description="A conversation in a task: who put it there, and (for an app) how sure it was and why.")
+class TaskThread(OrgScoped):
+    id: strawberry.ID
+    task: "Task"
+    thread: Thread
+    source: enums.TaskLinkSource
+    confidence: Optional[float]
+    reason: str
+    position: float
+    created_at: datetime.datetime
+
+    @strawberry_django.field(description="The client id of the app the link was made from, if any.")
+    def app_client_id(self) -> Optional[str]:
+        return self.client.client_id if self.client_id else None  # type: ignore[attr-defined]
+
+
+@kante.django_type(models.Task, pagination=True, filters=filters.TaskFilter, ordering=filters.TaskOrder, description="Something to do, made of mail conversations from any mailbox its owner can see. Only its owner sees it. Its status is independent of the mail: finishing a task changes no message.")
+class Task(OrgScoped):
+    id: strawberry.ID
+    title: str
+    notes: str
+    status: enums.TaskStatus
+    pinned: bool
+    due_at: Optional[datetime.datetime]
+    snoozed_until: Optional[datetime.datetime]
+    position: float
+    external_key: Optional[str]
+    list: Optional[TaskList]
+    completed_at: Optional[datetime.datetime]
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+
+    @strawberry_django.field(description="Whether the task is snoozed right now.")
+    def snoozed(self) -> bool:
+        return bool(self.snoozed_until and self.snoozed_until > timezone.now())  # type: ignore[attr-defined]
+
+    @strawberry_django.field(description="The client id of the app that created the task, if one did.")
+    def app_client_id(self) -> Optional[str]:
+        return self.client.client_id if self.client_id else None  # type: ignore[attr-defined]
+
+    @strawberry_django.field(description="The task's conversations with who put them there; only those in mailboxes the caller can still see.")
+    def links(self, info: Info) -> List[TaskThread]:
+        return list(_visible_links(self, info).select_related("thread", "client"))  # type: ignore[return-value]
+
+    @strawberry_django.field(description="The task's conversations, newest first; only those in mailboxes the caller can still see.")
+    def threads(self, info: Info) -> List[Thread]:
+        ids = _visible_links(self, info).values("thread_id")
+        return list(models.Thread.objects.filter(id__in=ids).order_by(F("last_message_at").desc(nulls_last=True), "-id"))  # type: ignore[return-value]
+
+    @strawberry_django.field(description="How many conversations the task has (visible ones).")
+    def thread_count(self, info: Info) -> int:
+        return _visible_links(self, info).count()
+
+    @strawberry_django.field(description="Unread messages over the task's conversations.")
+    def unread_count(self, info: Info) -> int:
+        ids = _visible_links(self, info).values("thread_id")
+        return models.Message.objects.filter(thread_id__in=ids).exclude(flags__contains=["\\Seen"]).count()
+
+    @strawberry_django.field(description="The newest message over the task's conversations.")
+    def latest_message(self, info: Info) -> Optional[Message]:
+        ids = _visible_links(self, info).values("thread_id")
+        return models.Message.objects.filter(thread_id__in=ids).order_by(F("date").desc(nulls_last=True), "-id").first()  # type: ignore[return-value]
