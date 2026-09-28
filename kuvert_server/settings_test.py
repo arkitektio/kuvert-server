@@ -1,5 +1,5 @@
 from .settings import *  # noqa
-from .settings import AUTHENTIKATE, DATABASES, KUVERT_MAIL, KUVERT_SYNC
+from .settings import AUTHENTIKATE, DATABASES, KUVERT_MAIL, KUVERT_SYNC, KUVERT_WRITEBACK
 import logging
 import os
 
@@ -36,6 +36,8 @@ KUVERT_SECRETS = {"key_path": "/nonexistent/set-by-conftest.fernet"}
 # The test mail server (GreenMail) runs on localhost with a self-signed certificate.
 KUVERT_MAIL = {**KUVERT_MAIL, "allowed_private_hosts": ["localhost"], "tls_verify": False}
 KUVERT_SYNC = {**KUVERT_SYNC, "connect_timeout_seconds": 10}
+# No undo windows: a change is pushed right after its request. Tests of the windows set them.
+KUVERT_WRITEBACK = {**KUVERT_WRITEBACK, "undo_seconds_moves": 0, "undo_seconds_deletes": 0}
 
 # `conftest.oauth` points both providers at the fake OAuth server of the test stack.
 KUVERT_OAUTH = {"google": None, "microsoft": None, "link_expires_seconds": 900}

@@ -9,7 +9,7 @@ from django.db import transaction
 from kante.errors import ValidationError
 from kante.types import Info
 
-from mail import crypto, enums, models, presets, storage, types
+from mail import changes, crypto, enums, models, presets, storage, types
 from mail.accounts import incoming_credentials, incoming_endpoint, smtp_credentials, smtp_endpoint
 from mail.graphql.errors import translated
 from mail.graphql.utils import aget_or_404, get_many, get_or_404, require_owner
@@ -71,6 +71,14 @@ class UpdateMailAccountInput:
     save_sent_copy: Optional[bool] = strawberry.UNSET
     pop_leave_on_server: Optional[bool] = strawberry.UNSET
     enabled: Optional[bool] = strawberry.field(default=strawberry.UNSET, description="False pauses the mailbox (DISABLED); true makes it ACTIVE again (after a successful login).")
+    push_seen: Optional[bool] = strawberry.field(default=strawberry.UNSET, description="Push read/unread to the server. Off keeps it here; turning it on pushes what was kept.")
+    push_flagged: Optional[bool] = strawberry.field(default=strawberry.UNSET, description="Push flagging to the server. Off keeps it here.")
+    push_keywords: Optional[bool] = strawberry.field(default=strawberry.UNSET, description="Push keywords (KEYWORD categories) to the server. Off keeps them here.")
+    push_moves: Optional[bool] = strawberry.field(default=strawberry.UNSET, description="Push moves and archiving. Off refuses moves (a folder only exists on the server).")
+    push_deletes: Optional[bool] = strawberry.field(default=strawberry.UNSET, description="Push deletes. Off only hides deleted mail here.")
+
+
+PUSH_TOGGLES = ("push_seen", "push_flagged", "push_keywords", "push_moves", "push_deletes")
 
 
 @strawberry.input(description="Who sees a mailbox.")
@@ -173,6 +181,11 @@ async def update_mail_account(info: Info, input: UpdateMailAccountInput) -> type
     account = await aget_or_404(models.MailAccount, info, input.id)
     require_owner(account, info)
     retest = False
+    before = {toggle: getattr(account, toggle) for toggle in PUSH_TOGGLES}
+    for toggle in PUSH_TOGGLES:
+        value = getattr(input, toggle)
+        if value is not strawberry.UNSET and value is not None:
+            setattr(account, toggle, value)
     if input.name is not strawberry.UNSET and input.name:
         account.name = input.name[:200]
     if input.display_name is not strawberry.UNSET:
@@ -211,6 +224,7 @@ async def update_mail_account(info: Info, input: UpdateMailAccountInput) -> type
         account.capabilities = await in_worker(_test_login, account)
         account.status, account.last_error, account.last_error_code = models.MailAccountStatus.ACTIVE, None, None
     await account.asave()
+    await database_sync_to_async(changes.apply_policy)(account, before, info.context.request.user)
     return account  # type: ignore[return-value]
 
 

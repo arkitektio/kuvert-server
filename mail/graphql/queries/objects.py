@@ -11,7 +11,7 @@ from mail.graphql.utils import get_or_404
 from mail.oauth.providers import configured_providers
 from mail.scoping import for_org
 
-__all__ = ["mail_account", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "oauth_providers", "threads_count", "messages_count", "task", "task_list", "tasks_count"]
+__all__ = ["mail_account", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "oauth_providers", "threads_count", "messages_count", "task", "task_list", "tasks_count", "category"]
 
 
 def threads_count(info: Info, filters: Optional[filters.ThreadFilter] = None) -> int:
@@ -24,7 +24,7 @@ def threads_count(info: Info, filters: Optional[filters.ThreadFilter] = None) ->
 
 def messages_count(info: Info, filters: Optional[filters.MessageFilter] = None) -> int:
     """How many messages match (the same filters as `messages`)."""
-    rows = for_org(models.Message, info)
+    rows = for_org(models.Message, info).filter(deleted_at=None)
     if filters is not None:
         rows = strawberry_django.filters.apply(filters, rows, info)
     return rows.count()
@@ -44,6 +44,10 @@ def message(info: Info, id: strawberry.ID) -> types.Message:
 
 def thread(info: Info, id: strawberry.ID) -> types.Thread:
     return get_or_404(models.Thread, info, id)  # type: ignore[return-value]
+
+
+def category(info: Info, id: strawberry.ID) -> types.Category:
+    return get_or_404(models.Category, info, id)  # type: ignore[return-value]
 
 
 def outgoing_message(info: Info, id: strawberry.ID) -> types.OutgoingMessage:

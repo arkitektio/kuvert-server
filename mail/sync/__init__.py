@@ -8,6 +8,11 @@ each chunk of messages in its own short transaction.
 
 Request/response only: a sync runs when a client asks (``syncMailAccount``) or when the hub's
 rekuest runs the scheduled ``sync_all_mailboxes`` action; nothing loops or waits here.
+
+A pass pushes before it pulls (:mod:`mail.push`): queued changes reach the server first, so what
+is read back already has them. After the pull, changes whose row the pull replaced are handed to
+the message's new rows and pushed too. Pushing alone (``flush_mail_changes``, and right after a
+request that queued a change) takes the same lease.
 """
 
 import logging
@@ -41,6 +46,7 @@ class SyncResult:
     deleted: int = 0
     folders: int = 0
     more: bool = False
+    pushed: int = 0
     new_messages: list[int] = field(default_factory=list)
     touched_folders: list[int] = field(default_factory=list)
 
@@ -119,9 +125,12 @@ def incoming_session(account: models.MailAccount) -> Iterator[object]:
 
 
 def run(account_id: int, folder_ids: list[int] | None = None) -> SyncResult:
-    """One blocking pass over the mailbox (the caller holds the lease; run it :func:`in_worker`)."""
+    """One blocking pass over the mailbox: push, pull, push again (the caller holds the lease; run it :func:`in_worker`)."""
+    from mail import push
+
     account = models.MailAccount.objects.get(id=account_id)
     with incoming_session(account) as client:
+        pushed = push.flush(client, account)
         if account.protocol == models.Protocol.POP3:
             from mail.sync import pop3
 
@@ -130,6 +139,10 @@ def run(account_id: int, folder_ids: list[int] | None = None) -> SyncResult:
             from mail.sync import imap
 
             outcome = imap.sync(client, account, folder_ids)  # type: ignore[arg-type]
+            push.resolve(account, final=folder_ids is None)
+            again = push.flush(client, account)
+            pushed.pushed += again.pushed
+            pushed.touched_folders |= again.touched_folders
     _mark_synced(account_id)
     return SyncResult(
         account_id=account_id,
@@ -139,9 +152,41 @@ def run(account_id: int, folder_ids: list[int] | None = None) -> SyncResult:
         deleted=outcome.deleted,
         folders=outcome.folders,
         more=outcome.more,
+        pushed=pushed.pushed,
         new_messages=outcome.new_messages,
-        touched_folders=sorted(outcome.touched_folders),
+        touched_folders=sorted(set(outcome.touched_folders) | pushed.touched_folders),
     )
+
+
+def push_now(account_id: int) -> SyncResult | None:
+    """Push the mailbox's due changes now (blocking), if it is active, has some, and no sync holds it; else None."""
+    from mail import push
+
+    account = models.MailAccount.objects.filter(id=account_id, status=models.MailAccountStatus.ACTIVE).first()
+    if account is None or not push.has_due(account_id) or not claim(account_id):
+        return None
+    try:
+        with incoming_session(account) as client:
+            pushed = push.flush(client, account)
+    except BaseException as error:
+        record_failure(account_id, error)
+        if code_for(error) is not None:
+            _back_off(account_id)
+        raise
+    finally:
+        release(account_id)
+    if account.last_error_code:
+        models.MailAccount.objects.filter(id=account_id).update(last_error=None, last_error_code=None)
+    return SyncResult(account_id=account_id, organization_id=account.organization_id, pushed=pushed.pushed, touched_folders=sorted(pushed.touched_folders))
+
+
+def _back_off(account_id: int) -> None:
+    """The server could not be used: its due changes wait ``writeback.backoff_base_seconds``, so requests
+    and ``flush_mail_changes`` do not reconnect to it every time (the changes' attempts stay; their server
+    never answered)."""
+    now = timezone.now()
+    wait = timedelta(seconds=int(settings.KUVERT_WRITEBACK["backoff_base_seconds"]))
+    models.MailChange.objects.filter(account_id=account_id, state=models.MailChangeState.PENDING, push_after__lte=now).update(push_after=now + wait)
 
 
 def in_worker(fn, *args, **kwargs):  # noqa: ANN001, ANN201
@@ -172,3 +217,23 @@ async def sync_account(account_id: int, folder_ids: list[int] | None = None) -> 
     logger.info("Synced mailbox %s: %s new, %s updated, %s deleted", account_id, result.created, result.updated, result.deleted)
     await database_sync_to_async(broadcast_sync)(result)
     return result
+
+
+async def push_account(account_id: int) -> SyncResult | None:
+    """:func:`push_now` in a worker; subscribers hear of what it moved."""
+    from mail.channels import broadcast_sync
+
+    result = await in_worker(push_now, account_id)
+    if result is not None and result.touched_folders:
+        await database_sync_to_async(broadcast_sync)(result)
+    return result
+
+
+async def push_soon(account_id: int) -> None:
+    """After a request queued changes: push them right away when ``writeback.push_inline`` (never failing the request)."""
+    if not settings.KUVERT_WRITEBACK.get("push_inline", True):
+        return
+    try:
+        await push_account(account_id)
+    except Exception as error:  # recorded on the mailbox; the change stays queued
+        logger.info("Pushing changes of mailbox %s right away failed: %s", account_id, error)

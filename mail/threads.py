@@ -77,8 +77,10 @@ def assign(message: models.Message) -> models.Thread:
 
 def refresh(thread_id: int) -> None:
     """Recount a thread; delete it once it holds no message -- unless a task links it (it may come back)."""
-    stats = models.Message.objects.filter(thread_id=thread_id).aggregate(count=Count("id"), last=Max("date"))
-    if not stats["count"] and not models.TaskThread.objects.filter(thread_id=thread_id).exists():
+    stats = models.Message.objects.filter(thread_id=thread_id, deleted_at=None).aggregate(count=Count("id"), last=Max("date"))
+    # Messages deleted here (not yet on the server, or undone) still hold the thread.
+    held = models.Message.objects.filter(thread_id=thread_id).exists() or models.TaskThread.objects.filter(thread_id=thread_id).exists()
+    if not stats["count"] and not held:
         models.Thread.objects.filter(id=thread_id).delete()
         return
     models.Thread.objects.filter(id=thread_id).update(message_count=stats["count"], last_message_at=stats["last"])

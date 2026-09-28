@@ -3,6 +3,12 @@
 Parsing and the datalayer uploads happen before the transaction (they are slow and touch no
 rows); the rows of one chunk are written in one atomic block. A message that is already stored
 (same folder, UIDVALIDITY and UID -- or UIDL) is skipped, so a retried chunk is harmless.
+
+A fetched message *adopts* a row of its folder with the same message key that has no valid UID
+there -- one moved here locally whose move reached the server without COPYUID, or one kept
+through a UIDVALIDITY reset -- instead of adding a second row: the row keeps its id, and whatever
+was changed on it here. New rows get their local state (pins, categories, see
+:mod:`mail.overlay`) laid over the server's flags right away.
 """
 
 import logging
@@ -11,8 +17,9 @@ from datetime import datetime
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 
-from mail import models, storage, threads
+from mail import models, overlay, storage, threads
 from mail.parse import ParsedMessage, parse, parse_headers
 
 logger = logging.getLogger(__name__)
@@ -64,17 +71,35 @@ def prepare(account: models.MailAccount, fetched: Fetched) -> Prepared:
 def write(account: models.MailAccount, folder: models.MailFolder, prepared: list[Prepared]) -> list[models.Message]:
     """Create the rows of one chunk (attachments, threads) in one transaction; returns the new messages."""
     created: list[models.Message] = []
+    adopted: list[models.Message] = []
     with transaction.atomic():
         for item in prepared:
             fetched, parsed = item.fetched, item.parsed
+            stores = [getattr(item.raw_store, "pk", None), *[getattr(s, "pk", None) for s in item.attachment_stores]]
             existing = models.Message.objects.filter(folder=folder)
             if fetched.uidl is not None:
                 existing = existing.filter(uidl=fetched.uidl)
             else:
                 existing = existing.filter(uidvalidity=fetched.uidvalidity, uid=fetched.uid)
             if existing.exists():
-                storage.orphan([getattr(item.raw_store, "pk", None), *[getattr(s, "pk", None) for s in item.attachment_stores]])
+                storage.orphan(stores)
                 continue
+            key = overlay.key_parts(parsed.message_id, parsed.sender_address[:320], parsed.date or fetched.received_at, parsed.subject[:10000], fetched.size)
+            if fetched.uidl is None:
+                waiting = (
+                    models.Message.objects.select_for_update(of=("self",))
+                    .filter(folder=folder, message_key=key)
+                    .filter(Q(uid__isnull=True) | ~Q(uidvalidity=fetched.uidvalidity))
+                    .exclude(changes__kind=models.MailChangeKind.MOVE)  # its move is still to be pushed
+                    .order_by("id")
+                    .first()
+                )
+                if waiting is not None:
+                    waiting.uid, waiting.uidvalidity, waiting.server_flags = fetched.uid, fetched.uidvalidity, fetched.flags
+                    models.Message.objects.filter(id=waiting.id).update(uid=fetched.uid, uidvalidity=fetched.uidvalidity, server_flags=fetched.flags)
+                    adopted.append(waiting)
+                    storage.orphan(stores)
+                    continue
             message = models.Message(
                 account=account,
                 folder=folder,
@@ -82,6 +107,7 @@ def write(account: models.MailAccount, folder: models.MailFolder, prepared: list
                 uidvalidity=fetched.uidvalidity,
                 uidl=fetched.uidl,
                 message_id=parsed.message_id,
+                message_key=key,
                 in_reply_to=parsed.in_reply_to,
                 references=parsed.references,
                 subject=parsed.subject[:10000],
@@ -99,6 +125,7 @@ def write(account: models.MailAccount, folder: models.MailFolder, prepared: list
                 has_remote_images=parsed.has_remote_images,
                 size=fetched.size,
                 flags=fetched.flags,
+                server_flags=fetched.flags,
                 has_attachments=parsed.has_attachments,
                 truncated=fetched.truncated,
                 raw=item.raw_store,
@@ -121,6 +148,7 @@ def write(account: models.MailAccount, folder: models.MailFolder, prepared: list
             )
             threads.assign(message)
             created.append(message)
+        overlay.materialize([*created, *adopted])
     return created
 
 

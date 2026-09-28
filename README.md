@@ -70,10 +70,14 @@ the schema and never written to history rows.
 - **IMAP identity** is (folder, UIDVALIDITY, UID).
   - If a folder's UIDVALIDITY changes, that folder is read again from scratch.
   - Messages expunged on the server are deleted here.
-  - Flags follow the server: via `CHANGEDSINCE` when the server has CONDSTORE, otherwise by
-    re-reading the flags of the newest `sync.flag_window` messages.
+  - The server's flags (`serverFlags`) are re-read via `CHANGEDSINCE` when the server has
+    CONDSTORE, otherwise for the newest `sync.flag_window` messages. Changes made here stay on
+    top of them (see [Changing mail](#changing-mail)).
+- **Push, then pull.** A sync first pushes the changes made here that are due, then reads the
+  server, then pushes what the read made findable again.
 - **POP3** has one INBOX, identified by UIDL.
-  - Flags are kept locally, and moves answer `UNSUPPORTED_BY_PROTOCOL`.
+  - Flags are kept locally, and moves answer `UNSUPPORTED_BY_PROTOCOL`. Deletes are pushed
+    (`DELE`).
   - With `popLeaveOnServer` (the default), the local copy mirrors the server.
   - Without it, mail is deleted on the server once stored, and the local copy is the only one.
 - **Folders** are discovered with their roles: SPECIAL-USE flags first, then well-known names in
@@ -86,8 +90,9 @@ the schema and never written to history rows.
 
 ## Reading
 
-- `messages(filters: {account, folder, folderRole, thread, unread, flagged, hasFlag, sender,
-  recipient, dateFrom, dateTo, hasAttachments, search, similarTo}, ordering, pagination)`.
+- `messages(filters: {account, folder, folderRole, thread, unread, flagged, hasFlag, category,
+  syncState, sender, recipient, dateFrom, dateTo, hasAttachments, search, similarTo}, ordering,
+  pagination)`.
 - `threads(filters: {account, folder, folderRole, unread, flagged, hasAttachments, search, ids})`
   lists conversations directly; a conversation matches when any of its messages does. A row
   shows `latestMessage(folder, folderRole)`, `participants` (distinct senders, oldest first),
@@ -108,12 +113,104 @@ the schema and never written to history rows.
 
 ## Changing mail
 
-`setMessageFlags`, `markMessagesRead`, `moveMessages` and `deleteMessages` change the server
-**first** and the database after. If the server refuses, nothing local changes.
+Every change is **local first**. `markMessagesRead`, `setMessageFlags`, `categorizeMessages`,
+`moveMessages` and `deleteMessages` change the database at once and answer with the messages
+as they are now. The server learns of the change afterwards, from a queue of changes
+(`mailChanges`).
 
-- A move reads the destination at once, so the moved messages come back with their new ids.
-- A delete moves messages to Trash. It expunges them when they are already in Trash, or when
-  `permanent` is set.
+**How a change reaches the server**
+
+- **Right after the request.** Pushed at once when the change is due
+  (`writeback.push_inline`).
+- **Scheduled.** Otherwise pushed by `flush_mail_changes` (every 30 s).
+- **Next sync.** Or pushed by the next sync.
+- **Undo windows.** A change is not pushed before its undo window ends (`writeback.undo_seconds_*`;
+  10 s for moves, 30 s for deletes, none for flags). Until then, `undoMailChanges` takes it back.
+- **Where a message stands.** `Message.syncState` is one of:
+  - `SYNCED`: as the server has it;
+  - `PENDING`: a change is on its way;
+  - `LOCAL`: changed here only;
+  - `FAILED`: the server refused a change.
+
+  `Message.changes` lists the change.
+- **Retries.** Refusals are retried with backoff. `retryMailChanges` queues FAILED changes again,
+  and `pushMailChanges(account)` pushes now.
+
+**Per-mailbox opt-outs** (`updateMailAccount`, owner only)
+
+| Setting | On (default) | Off |
+|---|---|---|
+| `pushSeen` | read/unread goes to the server | kept here |
+| `pushFlagged` | flagging goes to the server | kept here |
+| `pushKeywords` | keywords (KEYWORD categories, `$Label…`) go to the server | kept here |
+| `pushMoves` | moves and archiving go to the server | moves are refused: a folder only exists on the server |
+| `pushDeletes` | deletes go to the server (Trash, then expunge) | deleted mail is only hidden here |
+
+- **A value kept here pins the message.** Server changes to that flag no longer show on it. Other
+  flags, and messages not touched here, still follow the server.
+- **Undoing a pin.** `revertMessagesToServer` drops the pin.
+- **Turning a setting on** pushes what was kept.
+
+**How changes behave**
+
+- **Moves keep ids.** The message is in its new folder here at once. The push uses the
+  server's COPYUID to learn the new UID; without COPYUID, the next sync of the folder adopts the row
+  instead of adding a copy.
+- **Deletes.** A delete moves messages to Trash. It expunges them when they are already in Trash,
+  or when `permanent` is set.
+- **Conflicts.** For a flag changed here, the local value wins over a change another client made
+  before the push. Pushes are `+FLAGS`/`-FLAGS` deltas, so other flags are never overwritten.
+
+## Categories
+
+Categories belong to a mailbox and are shared by everyone who sees it
+(`createCategory`, `updateCategory`, `deleteCategory`, `categorizeMessages`,
+`messages(filters: {category})`).
+
+- **LOCAL** categories live only here, kept under the message key: the Message-ID, else a hash of
+  the headers. Moves and copies anywhere keep them.
+- **KEYWORD** categories *are* an IMAP keyword on the server (`$Work`), so other mail clients see
+  them.
+  - A keyword another client sets puts the message into the category.
+  - A new KEYWORD category starts out holding the messages that already carry its keyword.
+- **Switching** between LOCAL and KEYWORD keeps the members. `removeKeywords` also takes the
+  keyword off the server.
+
+## Limitations
+
+- **Latency.** Other mail clients see a change only after its undo window and the next push (at
+  once, or within `writeback.flush_every_seconds`).
+- **Local wins, per flag.** If another client changes the same flag between the change here and
+  its push, the change here wins. Other flags are unaffected.
+- **Pins diverge from the server** until `revertMessagesToServer`, or until the push setting is
+  turned on again.
+  - A pin or a LOCAL category applies to every copy of a message with the same message key.
+  - Messages that share a Message-ID (sent to yourself, list duplicates) therefore share them.
+- **Keyword support varies by server.**
+  - A folder without `\*` in its PERMANENTFLAGS keeps no keywords. Its KEYWORD categories stay
+    local and the change is FAILED (`KEYWORDS_NOT_PERMITTED`). `MailFolder.keywordsAllowed` shows
+    this, and is learned on the first push.
+  - Dovecot with Maildir allows at most 26 keywords per mailbox.
+- **Gmail.**
+  - Whether Gmail keeps custom keywords is unverified, and keywords are not Gmail labels. Real label
+    sync would need `X-GM-LABELS`.
+  - Gmail already shows a message once per label folder.
+- **Outlook / Exchange.** Whether IMAP keywords map to Outlook categories is unverified. Native
+  categories need Microsoft Graph.
+- **Servers without UIDPLUS.**
+  - A queued expunge is refused (`UNSAFE_EXPUNGE`) while other messages of the folder are marked
+    `\Deleted`: a plain EXPUNGE would remove those too.
+  - Without COPYUID, a moved message without a Message-ID cannot be adopted and comes back as a
+    new row.
+- **Servers without CONDSTORE.** Server flag changes are only read for the newest
+  `sync.flag_window` messages per folder.
+- **Undo** only works before the push. An expunged message is gone for good.
+- **Team mailboxes.** Read state and categories are shared by everyone who sees the mailbox; there
+  is no per-member read state.
+- **Paused and removed mailboxes.** A DISABLED or NEEDS_REAUTH mailbox keeps its queue until it is
+  active again. Deleting a mailbox drops its queue.
+- **POP3.** Messages deleted here are deleted from the row before QUIT commits the `DELE`. If QUIT
+  fails, the next sync reads the message in again.
 
 ## Tasks
 
@@ -171,6 +268,7 @@ With `rekuest_hook` configured, the hub's rekuest runs these actions:
 | Action | Default schedule | What it does |
 |---|---|---|
 | `sync_all_mailboxes` | every 300 s | one sync pass of every ACTIVE mailbox (mailboxes being synced are skipped) |
+| `flush_mail_changes` | every 30 s | pushes the due changes made here; only mailboxes with some are connected to |
 | `reembed_stale` | every `embeddings.sweep_interval` | embeds messages whose vector is missing or from another model |
 | `purge_orphaned_stores` | every 6 h (with a datalayer) | deletes stored raw messages and attachments whose messages have been gone for a day |
 

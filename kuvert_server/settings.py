@@ -167,6 +167,7 @@ CACHE_TTL_DEFAULT = 60 * 15
 # Mailbox credentials are Fernet-encrypted with the key(s) in this file (``mail.crypto``).
 KUVERT_SECRETS = conf.secrets.model_dump()
 KUVERT_SYNC = conf.sync.model_dump()
+KUVERT_WRITEBACK = conf.writeback.model_dump()
 KUVERT_MAIL = conf.mail.model_dump()
 KUVERT_OAUTH = conf.oauth.model_dump()
 # The vendored datalayer reads only this; empty without a `datalayer` block (raw messages and

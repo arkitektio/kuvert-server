@@ -13,6 +13,12 @@ Identity is (folder, UIDVALIDITY, UID). Per folder and run:
 
 New mail and backfill share ``sync.batch_size`` per folder and run, so a large mailbox fills
 in over several runs (``more`` in the result) and no single request runs long.
+
+Local changes (:mod:`mail.changes`) survive all of it: sync writes ``server_flags`` only and
+re-materializes the effective ``flags``; a UIDVALIDITY reset keeps rows still waiting for a queued
+move or delete (a fetched message adopts them instead of adding a copy, see
+:func:`mail.sync.store.write`); and a message a queued move or delete takes out of a folder is
+not read in there again while the server still has it.
 """
 
 import logging
@@ -22,7 +28,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
 
-from mail import models
+from mail import models, overlay
 from mail.protocols.clients import GuardedIMAPClient
 from mail.sync.store import Fetched, delete, max_message_bytes, prepare, write
 
@@ -97,6 +103,12 @@ def discover_folders(client: GuardedIMAPClient, account: models.MailAccount) -> 
             folder.role, folder.selectable, folder.exists_on_server = role, selectable, True
             folder.save(update_fields=["role", "selectable", "exists_on_server"])
     for gone in models.MailFolder.objects.filter(account=account).exclude(path__in=seen):
+        # Moves into it that never reached the server go back to where the server has the message.
+        for change in models.MailChange.objects.filter(target_folder=gone, kind=models.MailChangeKind.MOVE).exclude(origin_folder=gone):
+            if change.message_id and change.origin_folder_id:
+                models.Message.objects.filter(id=change.message_id).update(folder_id=change.origin_folder_id, uid=change.origin_uid, uidvalidity=change.origin_uidvalidity)
+                overlay.recount([change.origin_folder_id])
+            change.delete()
         delete(gone.messages.all())
         gone.delete()
     return list(models.MailFolder.objects.filter(account=account, sync_enabled=True, selectable=True).order_by("id"))
@@ -142,7 +154,7 @@ def _store(client: GuardedIMAPClient, account: models.MailAccount, folder: model
 
 
 def _sync_flags(client: GuardedIMAPClient, folder: models.MailFolder, uidvalidity: int, condstore: bool, highest_modseq: int | None, stored: dict[int, int]) -> int:
-    """Re-read flags of stored messages; returns how many changed."""
+    """Re-read the server's flags of stored messages (``server_flags``); returns how many changed."""
     if not stored:
         return 0
     if condstore and folder.highest_modseq and highest_modseq:
@@ -155,15 +167,34 @@ def _sync_flags(client: GuardedIMAPClient, folder: models.MailFolder, uidvalidit
     by_uid = {uid: _flags(data.get(b"FLAGS", ())) for uid, data in changed.items() if uid in stored}
     if not by_uid:
         return 0
-    rows = list(models.Message.objects.filter(folder=folder, uidvalidity=uidvalidity, uid__in=list(by_uid)).only("id", "uid", "flags"))
+    rows = list(models.Message.objects.filter(folder=folder, uidvalidity=uidvalidity, uid__in=list(by_uid)).only("id", "uid", "account_id", "message_key", "flags", "server_flags", "category_ids"))
     dirty = []
     for row in rows:
         flags = by_uid[row.uid]
-        if sorted(flags) != sorted(row.flags):
-            row.flags = flags
+        if sorted(flags) != sorted(row.server_flags):
+            row.server_flags = flags
             dirty.append(row)
-    models.Message.objects.bulk_update(dirty, ["flags"], batch_size=500)
+    models.Message.objects.bulk_update(dirty, ["server_flags"], batch_size=500)
+    overlay.materialize(dirty)
     return len(dirty)
+
+
+_LEAVING = (models.MailChangeKind.MOVE, models.MailChangeKind.EXPUNGE)
+
+
+def _leaving(folder: models.MailFolder, uidvalidity: int) -> set[int]:
+    """UIDs a queued move or delete takes out of ``folder``: the server still has them there, not for long."""
+    return set(models.MailChange.objects.filter(origin_folder=folder, origin_uidvalidity=uidvalidity, kind__in=_LEAVING, state__in=overlay.OPEN_STATES).exclude(origin_uid=None).values_list("origin_uid", flat=True))
+
+
+def _relocate_leaving(client: GuardedIMAPClient, folder: models.MailFolder, uidvalidity: int) -> None:
+    """After a UIDVALIDITY change: find the messages queued moves and deletes start from again, by Message-ID."""
+    for change in models.MailChange.objects.filter(origin_folder=folder, kind__in=_LEAVING, state__in=overlay.OPEN_STATES).exclude(origin_uidvalidity=uidvalidity):
+        uid = None
+        if change.message_key and not change.message_key.startswith("h:"):
+            found = client.search(["HEADER", "Message-ID", f"<{change.message_key}>"])
+            uid = max(found) if found else None
+        models.MailChange.objects.filter(id=change.id).update(origin_uidvalidity=uidvalidity, origin_uid=uid)
 
 
 def sync_folder(client: GuardedIMAPClient, account: models.MailAccount, folder: models.MailFolder, result: ImapResult, condstore: bool) -> None:
@@ -174,10 +205,14 @@ def sync_folder(client: GuardedIMAPClient, account: models.MailAccount, folder: 
     first = folder.uidvalidity != uidvalidity
     if first and folder.uidvalidity is not None:
         logger.info("UIDVALIDITY of %s changed (%s → %s); resyncing it", folder.path, folder.uidvalidity, uidvalidity)
-        result.deleted += delete(folder.messages.all())
+        # Rows already in the new epoch (a pushed move's COPYUID), waiting for a queued move (no
+        # UID) or deleted here stay; the refetch adopts the ones without a valid UID.
+        result.deleted += delete(folder.messages.exclude(uid=None).exclude(uidvalidity=uidvalidity).filter(deleted_at=None).exclude(changes__kind=models.MailChangeKind.MOVE))
+        _relocate_leaving(client, folder, uidvalidity)
     if first:
         folder.uidvalidity, folder.last_uid, folder.oldest_uid, folder.backfill_done, folder.highest_modseq = uidvalidity, 0, None, False, None
 
+    leaving = _leaving(folder, uidvalidity)
     on_server = sorted(client.search("ALL"))
     server_set = set(on_server)
     stored = dict(folder.messages.filter(uidvalidity=uidvalidity).exclude(uid=None).values_list("uid", "id"))
@@ -191,7 +226,7 @@ def sync_folder(client: GuardedIMAPClient, account: models.MailAccount, folder: 
 
     budget = min(int(settings.KUVERT_SYNC["batch_size"]), max(0, int(settings.KUVERT_SYNC["max_messages_per_run"]) - result.created))
     if not first:
-        new = [uid for uid in on_server if uid > folder.last_uid and uid not in stored][:budget]
+        new = [uid for uid in on_server if uid > folder.last_uid and uid not in stored and uid not in leaving][:budget]
         if new:
             _store(client, account, folder, new, uidvalidity, result)
             folder.last_uid = max(folder.last_uid, max(new))
@@ -204,7 +239,7 @@ def sync_folder(client: GuardedIMAPClient, account: models.MailAccount, folder: 
     if not folder.backfill_done:
         days = settings.KUVERT_SYNC.get("backfill_days")
         window = server_set if not days else set(client.search(["SINCE", (timezone.now() - timedelta(days=int(days))).date()]))
-        pool = sorted((uid for uid in window if uid not in stored and (folder.oldest_uid is None or uid < folder.oldest_uid) and uid <= folder.last_uid), reverse=True)
+        pool = sorted((uid for uid in window if uid not in stored and uid not in leaving and (folder.oldest_uid is None or uid < folder.oldest_uid) and uid <= folder.last_uid), reverse=True)
         take = pool[: max(budget, 0)]
         if take:
             _store(client, account, folder, take, uidvalidity, result)
@@ -216,10 +251,11 @@ def sync_folder(client: GuardedIMAPClient, account: models.MailAccount, folder: 
 
     status = client.folder_status(folder.path, [b"MESSAGES", b"UNSEEN"])
     folder.total_count = int(status.get(b"MESSAGES", len(on_server)))
-    folder.unread_count = int(status.get(b"UNSEEN", 0))
+    folder.server_unread_count = int(status.get(b"UNSEEN", 0))
     folder.highest_modseq = highest_modseq
     folder.last_synced_at = timezone.now()
     folder.save()
+    overlay.recount([folder.id])
 
 
 def sync(client: GuardedIMAPClient, account: models.MailAccount, folder_ids: list[int] | None = None) -> ImapResult:

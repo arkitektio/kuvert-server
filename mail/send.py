@@ -6,7 +6,7 @@ outcome is recorded on an :class:`~mail.models.OutgoingMessage` (the audit trail
 
 * a copy is appended to the mailbox's Sent folder (``save_sent_copy``; Gmail and Microsoft keep
   one themselves), and read in, so it shows up in the thread at once;
-* the message it answers is flagged ``\\Answered``.
+* the message it answers is flagged ``\\Answered`` (a queued change, pushed right away).
 
 A failure after the SMTP server accepted the message never turns the send into a failure: the
 mail is out, and saying otherwise would make a user send it twice.
@@ -21,7 +21,7 @@ from email.utils import formataddr, format_datetime, make_msgid
 from django.conf import settings
 from django.utils import timezone
 
-from mail import accounts, models, storage, sync, writeback
+from mail import accounts, changes, models, storage, sync
 from mail.errors import MailError, code_for, not_configured
 from mail.protocols.clients import open_smtp
 from mail.sync import imap as imap_sync
@@ -127,7 +127,9 @@ def send(outgoing: models.OutgoingMessage) -> models.OutgoingMessage:
     parent = outgoing.in_reply_to
     if parent is not None and "\\Answered" not in parent.flags:
         try:
-            writeback.set_flags(account, [models.Message.objects.select_related("folder").get(pk=parent.pk)], ["\\Answered"], [])
+            changes.set_flags(account, [parent], ["\\Answered"], [], outgoing.creator)
+            if settings.KUVERT_WRITEBACK.get("push_inline", True):
+                sync.push_now(account.id)
         except Exception:
             logger.warning("Sent reply %s, but could not flag %s as answered.", outgoing.pk, parent.pk, exc_info=True)
     return outgoing

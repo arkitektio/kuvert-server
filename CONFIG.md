@@ -159,6 +159,19 @@ The authentikate library's own schema: `issuers` (the lok JWKS/RSA keys tokens a
 | `scheduled_every_seconds` | `SYNC__SCHEDULED_EVERY_SECONDS` | Optional[int] | `300` | The default schedule rekuest gives the `sync_all_mailboxes` action. Null declares no default — the action then only runs when scheduled or triggered in rekuest. |
 | `connect_timeout_seconds` | `SYNC__CONNECT_TIMEOUT_SECONDS` | float | `30` | Socket timeout for IMAP, POP3 and SMTP connections. |
 
+### `writeback` (optional; defaults apply) — How changes made here (flags, categories, moves, deletes) reach the server (``mail.push``): every change is local first and queued.
+
+| Key | Env var | Type | Default | Description |
+|---|---|---|---|---|
+| `push_inline` | `WRITEBACK__PUSH_INLINE` | bool | `True` | Try to push a change right after the request that made it (when it is due and no sync holds the mailbox). Off leaves everything to `flush_mail_changes` and syncs. |
+| `flush_every_seconds` | `WRITEBACK__FLUSH_EVERY_SECONDS` | Optional[int] | `30` | The default schedule rekuest gives the `flush_mail_changes` action. Null declares no default. |
+| `undo_seconds_flags` | `WRITEBACK__UNDO_SECONDS_FLAGS` | int | `0` | How long a flag change waits before it may be pushed (and can be undone). |
+| `undo_seconds_moves` | `WRITEBACK__UNDO_SECONDS_MOVES` | int | `10` | How long a move waits before it may be pushed (and can be undone). |
+| `undo_seconds_deletes` | `WRITEBACK__UNDO_SECONDS_DELETES` | int | `30` | How long a delete waits before it may be pushed (and can be undone). |
+| `max_attempts` | `WRITEBACK__MAX_ATTEMPTS` | int | `8` | A change the server keeps refusing is marked FAILED after this many attempts; the local state stays. |
+| `backoff_base_seconds` | `WRITEBACK__BACKOFF_BASE_SECONDS` | int | `30` | The wait after the first failed attempt; it doubles with every further one. |
+| `backoff_max_seconds` | `WRITEBACK__BACKOFF_MAX_SECONDS` | int | `3600` | The longest wait between two attempts. |
+
 ### `mail` (optional; defaults apply) — What the service may connect to, and how it renders and sends mail.
 
 | Key | Env var | Type | Default | Description |

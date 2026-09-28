@@ -6,13 +6,21 @@ what :mod:`mail.scoping` follows. A mailbox is private to the member who linked 
 share it (``visibility``).
 
 A message's identity on the server is (folder, UIDVALIDITY, UID) for IMAP and (UIDL) for POP3;
-``message_id`` (the RFC 5322 header) is what threads and cross-folder copies are matched by.
+``message_id`` (the RFC 5322 header) is what threads and cross-folder copies are matched by, and
+``message_key`` (the Message-ID, else a hash of the headers) what local state is kept under.
+
+Local first (:mod:`mail.changes`): a change a member makes is applied to the rows at once and
+queued as a :class:`MailChange`, which :mod:`mail.push` later applies to the server; a change the
+mailbox does not push (its ``push_*`` settings) stays local as a :class:`LocalPin`. A message's
+``flags`` are always the effective ones: ``server_flags`` with pins and pending changes applied
+(:mod:`mail.overlay`).
 """
 
 from authentikate.models import Client, Organization, User
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
 from django.db import models
+from django.db.models.functions import Lower
 from koherent.fields import ProvenanceField
 
 from datalayer.models import BigFileStore
@@ -42,6 +50,10 @@ class MailErrorCode(models.TextChoices):
     INVALID_STATE = "INVALID_STATE", "The link state is unknown, used or belongs to someone else"
     CODE_EXPIRED = "CODE_EXPIRED", "The link was not completed in time"
     PROVIDER_ERROR = "PROVIDER_ERROR", "The OAuth provider answered with an error"
+    UNSUPPORTED_BY_POLICY = "UNSUPPORTED_BY_POLICY", "The mailbox is set not to change this on the server (its push settings)"
+    KEYWORDS_NOT_PERMITTED = "KEYWORDS_NOT_PERMITTED", "The folder does not keep keywords (no \\* in PERMANENTFLAGS); the category stays local"
+    MESSAGE_GONE = "MESSAGE_GONE", "The message is no longer where the change expected it on the server"
+    UNSAFE_EXPUNGE = "UNSAFE_EXPUNGE", "Without UIDPLUS an expunge would also remove other deleted messages of the folder"
 
 
 class Provider(models.TextChoices):
@@ -127,6 +139,29 @@ class TaskLinkSource(models.TextChoices):
     APP = "APP", "An app that sorts mail"
 
 
+class MailChangeKind(models.TextChoices):
+    """What a queued change does on the server."""
+
+    FLAGS = "FLAGS", "Add and remove flags and keywords (STORE)"
+    MOVE = "MOVE", "Move the message to another folder"
+    EXPUNGE = "EXPUNGE", "Delete the message for good"
+    POP_DELE = "POP_DELE", "Delete the message on a POP3 server"
+
+
+class MailChangeState(models.TextChoices):
+    """Where a queued change is. A pushed change is deleted."""
+
+    PENDING = "PENDING", "Waiting to be pushed (from `pushAfter` on)"
+    FAILED = "FAILED", "The server refused it or it ran out of attempts; the local state stays"
+
+
+class CategorySync(models.TextChoices):
+    """Where a category lives."""
+
+    LOCAL = "LOCAL", "Only here; the server never sees it"
+    KEYWORD = "KEYWORD", "As an IMAP keyword on the server, so other mail clients see it"
+
+
 class OAuthLinkStatus(models.TextChoices):
     """Lifecycle of an OAuth link attempt."""
 
@@ -170,6 +205,11 @@ class MailAccount(models.Model):
 
     save_sent_copy = models.BooleanField(default=True, help_text="Append sent mail to the Sent folder (off for Gmail and Microsoft, which keep a copy themselves).")
     pop_leave_on_server = models.BooleanField(default=True, help_text="POP3: keep downloaded mail on the server. Off deletes it there once stored.")
+    push_seen = models.BooleanField(default=True, help_text="Push read/unread (\\Seen) to the server. Off keeps it local.")
+    push_flagged = models.BooleanField(default=True, help_text="Push flagging (\\Flagged) to the server. Off keeps it local.")
+    push_keywords = models.BooleanField(default=True, help_text="Push keywords (KEYWORD categories, $Label…) to the server. Off keeps them local.")
+    push_moves = models.BooleanField(default=True, help_text="Push moves (and archiving) to the server. Off refuses moves: a folder only exists on the server.")
+    push_deletes = models.BooleanField(default=True, help_text="Push deletes to the server. Off only hides deleted mail here.")
     capabilities = ArrayField(models.CharField(max_length=100), default=list, blank=True, help_text="What the incoming server announced (IMAP CAPABILITY, POP3 CAPA).")
 
     sync_lease_until = models.DateTimeField(null=True, blank=True, help_text="Held by a running sync until then.")
@@ -208,7 +248,10 @@ class MailFolder(models.Model):
     oldest_uid = models.BigIntegerField(null=True, blank=True, help_text="The lowest UID stored by the backfill.")
     backfill_done = models.BooleanField(default=False, help_text="The backfill reached the window (or the first message).")
     total_count = models.IntegerField(default=0, help_text="Messages in the folder, as the server counts them.")
-    unread_count = models.IntegerField(default=0, help_text="Unread messages in the folder, as the server counts them.")
+    unread_count = models.IntegerField(default=0, help_text="Unread messages in the folder, as they are here (local changes included).")
+    server_unread_count = models.IntegerField(default=0, help_text="Unread messages in the folder, as the server counts them.")
+    permanent_flags = ArrayField(models.CharField(max_length=200), default=list, blank=True, help_text="The PERMANENTFLAGS the server announced when the folder was last changed.")
+    keywords_allowed = models.BooleanField(default=True, help_text="The folder keeps any keyword (\\* in PERMANENTFLAGS); assumed until a push sees otherwise.")
     last_synced_at = models.DateTimeField(null=True, blank=True, help_text="When the folder was last synced.")
 
     class Meta:
@@ -242,6 +285,7 @@ class Message(EmbeddedDescriptionMixin, models.Model):
     uidvalidity = models.BigIntegerField(null=True, blank=True, help_text="IMAP: the UIDVALIDITY the UID belongs to.")
     uidl = models.CharField(max_length=100, null=True, blank=True, help_text="POP3: the server's unique id.")
     message_id = models.CharField(max_length=998, null=True, blank=True, help_text="The Message-ID header, without angle brackets.")
+    message_key = models.CharField(max_length=998, default="", blank=True, help_text="What local state (pins, categories) is kept under: the Message-ID, else a hash of the headers.")
     in_reply_to = models.CharField(max_length=998, null=True, blank=True, help_text="The In-Reply-To header, without angle brackets.")
     references = ArrayField(models.CharField(max_length=998), default=list, blank=True, help_text="The References header, oldest first.")
     subject = models.TextField(blank=True, default="", help_text="The decoded subject.")
@@ -258,7 +302,10 @@ class Message(EmbeddedDescriptionMixin, models.Model):
     html_body = models.TextField(blank=True, default="", help_text="The HTML body, sanitized (no scripts, handlers, forms); remote images are kept here and stripped on read unless asked for.")
     has_remote_images = models.BooleanField(default=False, help_text="The HTML loads images from the internet.")
     size = models.IntegerField(default=0, help_text="The message size in bytes.")
-    flags = ArrayField(models.CharField(max_length=200), default=list, blank=True, help_text="IMAP flags and keywords (\\Seen, \\Flagged, \\Answered, \\Draft, $Label…).")
+    flags = ArrayField(models.CharField(max_length=200), default=list, blank=True, help_text="The effective flags and keywords (\\Seen, \\Flagged, \\Answered, \\Draft, $Label…): the server's with local changes applied.")
+    server_flags = ArrayField(models.CharField(max_length=200), default=list, blank=True, help_text="The flags as the server last had them.")
+    category_ids = ArrayField(models.BigIntegerField(), default=list, blank=True, help_text="The categories the message is in (materialized, see mail.overlay).")
+    deleted_at = models.DateTimeField(null=True, blank=True, help_text="Deleted here; hidden, and gone once the delete reaches the server.")
     has_attachments = models.BooleanField(default=False, help_text="The message has attachments (not counting inline images).")
     truncated = models.BooleanField(default=False, help_text="The message was larger than the sync limit; only its headers are stored.")
     raw = models.ForeignKey(BigFileStore, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", help_text="The raw RFC 5322 message in the datalayer (null without one).")
@@ -275,6 +322,8 @@ class Message(EmbeddedDescriptionMixin, models.Model):
             models.Index(fields=["folder", "-date"], name="mail_msg_folder_date"),
             models.Index(fields=["account", "-date"], name="mail_msg_account_date"),
             models.Index(fields=["account", "message_id"], name="mail_msg_account_mid"),
+            models.Index(fields=["account", "message_key"], name="mail_msg_account_key"),
+            GinIndex(fields=["category_ids"], name="mail_msg_categories"),
             *embedding_indexes("mail_msg"),
         ]
 
@@ -288,6 +337,97 @@ class Message(EmbeddedDescriptionMixin, models.Model):
 
     def __str__(self) -> str:
         return f"{self.subject!r} from {self.sender_address}"
+
+
+class MailChange(models.Model):
+    """A change made here that still has to reach the server (see :mod:`mail.push`).
+
+    ``origin_*`` is where a MOVE or EXPUNGE finds the message on the server: the row itself has
+    already left (moved rows wait with a null UID, deleted ones carry ``deleted_at``). A FLAGS
+    change finds it through its row, and through ``message_key`` once sync replaced the row.
+    """
+
+    account = models.ForeignKey(MailAccount, on_delete=models.CASCADE, related_name="changes", help_text="The mailbox.")
+    message = models.ForeignKey("Message", on_delete=models.SET_NULL, null=True, blank=True, related_name="changes", help_text="The row the change was made on (null once sync replaced it).")
+    message_key = models.CharField(max_length=998, help_text="The message's key, to find it again.")
+    kind = models.CharField(max_length=10, choices=MailChangeKind.choices, help_text="What the change does.")
+    state = models.CharField(max_length=10, choices=MailChangeState.choices, default=MailChangeState.PENDING, help_text="Where the change is.")
+    add = ArrayField(models.CharField(max_length=200), default=list, blank=True, help_text="FLAGS: flags and keywords to add.")
+    remove = ArrayField(models.CharField(max_length=200), default=list, blank=True, help_text="FLAGS: flags and keywords to remove.")
+    origin_folder = models.ForeignKey(MailFolder, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", help_text="MOVE/EXPUNGE: the folder the message is in on the server.")
+    origin_uidvalidity = models.BigIntegerField(null=True, blank=True, help_text="MOVE/EXPUNGE: the UIDVALIDITY of the UID.")
+    origin_uid = models.BigIntegerField(null=True, blank=True, help_text="MOVE/EXPUNGE: the message's UID there.")
+    origin_uidl = models.CharField(max_length=100, null=True, blank=True, help_text="POP_DELE: the message's UIDL.")
+    target_folder = models.ForeignKey(MailFolder, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", help_text="MOVE: the folder the message goes to.")
+    push_after = models.DateTimeField(help_text="Not pushed before then: the undo window, or the backoff after a failure.")
+    attempts = models.IntegerField(default=0, help_text="Failed attempts so far.")
+    error = models.TextField(null=True, blank=True, help_text="Why the last attempt failed.")
+    error_code = models.CharField(max_length=30, choices=MailErrorCode.choices, null=True, blank=True, help_text="The machine-readable kind of `error`.")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", help_text="The member who made the change.")
+    created_at = models.DateTimeField(auto_now_add=True, help_text="When the change was made.")
+    updated_at = models.DateTimeField(auto_now=True, help_text="When the change last changed (coalesced, retried).")
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [models.UniqueConstraint(fields=["message", "kind"], condition=models.Q(message__isnull=False), name="mail_change_one_per_kind")]
+        indexes = [
+            models.Index(fields=["state", "push_after"], name="mail_change_due"),
+            models.Index(fields=["account", "message_key"], name="mail_change_key"),
+        ]
+
+
+class LocalPin(models.Model):
+    """Flags changed here that the mailbox does not push: they override the server's for every copy of the message."""
+
+    account = models.ForeignKey(MailAccount, on_delete=models.CASCADE, related_name="pins", help_text="The mailbox.")
+    message_key = models.CharField(max_length=998, help_text="The message's key.")
+    add = ArrayField(models.CharField(max_length=200), default=list, blank=True, help_text="Flags set here.")
+    remove = ArrayField(models.CharField(max_length=200), default=list, blank=True, help_text="Flags cleared here.")
+    updated_at = models.DateTimeField(auto_now=True, help_text="When the pin last changed.")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["account", "message_key"], name="mail_pin_account_key")]
+
+
+class Category(models.Model):
+    """A category of a mailbox, shared by everyone who sees the mailbox.
+
+    A KEYWORD category *is* its keyword: a message is in it when the keyword is among its flags,
+    so the membership reaches other mail clients and survives moves made there. A LOCAL
+    category's members are its assignments, kept under the message key.
+    """
+
+    account = models.ForeignKey(MailAccount, on_delete=models.CASCADE, related_name="categories", help_text="The mailbox.")
+    name = models.CharField(max_length=200, help_text="The category's name.")
+    color = models.CharField(max_length=20, blank=True, default="", help_text="A display color (e.g. #4f86f7).")
+    sync = models.CharField(max_length=10, choices=CategorySync.choices, default=CategorySync.LOCAL, help_text="Where the category lives.")
+    keyword = models.CharField(max_length=100, help_text="The IMAP keyword (e.g. $Invoices) a KEYWORD category is kept as.")
+    created_at = models.DateTimeField(auto_now_add=True, help_text="When the category was created.")
+    provenance = ProvenanceField()
+
+    class Meta:
+        ordering = ["name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["account", "name"], name="mail_cat_account_name"),
+            models.UniqueConstraint(models.F("account"), Lower("keyword"), name="mail_cat_account_keyword"),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+class CategoryAssignment(models.Model):
+    """A message in a LOCAL category, by message key (so moves and copies keep it)."""
+
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="assignments", help_text="The category.")
+    account = models.ForeignKey(MailAccount, on_delete=models.CASCADE, related_name="+", help_text="The mailbox.")
+    message_key = models.CharField(max_length=998, help_text="The message's key.")
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+", help_text="Who put the message there.")
+    created_at = models.DateTimeField(auto_now_add=True, help_text="When.")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["category", "message_key"], name="mail_catassign_unique")]
+        indexes = [models.Index(fields=["account", "message_key"], name="mail_catassign_key")]
 
 
 class Attachment(models.Model):

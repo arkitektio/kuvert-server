@@ -176,6 +176,19 @@ class SyncSettings(BaseModel):
     connect_timeout_seconds: float = Field(default=30, description="Socket timeout for IMAP, POP3 and SMTP connections.")
 
 
+class WritebackSettings(BaseModel):
+    """How changes made here reach the server (``mail.push``): every change is local first and queued."""
+
+    push_inline: bool = Field(default=True, description="Try to push a change right after the request that made it (when it is due and no sync holds the mailbox). Off leaves everything to `flush_mail_changes` and syncs.")
+    flush_every_seconds: Optional[int] = Field(default=30, description="The default schedule rekuest gives the `flush_mail_changes` action. Null declares no default.")
+    undo_seconds_flags: int = Field(default=0, description="How long a flag change waits before it may be pushed (and can be undone).")
+    undo_seconds_moves: int = Field(default=10, description="How long a move waits before it may be pushed (and can be undone).")
+    undo_seconds_deletes: int = Field(default=30, description="How long a delete waits before it may be pushed (and can be undone).")
+    max_attempts: int = Field(default=8, description="A change the server keeps refusing is marked FAILED after this many attempts; the local state stays.")
+    backoff_base_seconds: int = Field(default=30, description="The wait after the first failed attempt; it doubles with every further one.")
+    backoff_max_seconds: int = Field(default=3600, description="The longest wait between two attempts.")
+
+
 class MailSettings(BaseModel):
     """What the service may connect to, and how it renders and sends mail."""
 
@@ -237,6 +250,7 @@ class Settings(BaseSettings):
     authentikate: AuthentikateSettings = Field(description="Token-verification config (authentikate).")
     secrets: SecretsSettings = Field(description="Encryption at rest for mailbox credentials.")
     sync: SyncSettings = Field(default_factory=SyncSettings, description="How syncs run.")
+    writeback: WritebackSettings = Field(default_factory=WritebackSettings, description="How local changes (flags, categories, moves, deletes) reach the server.")
     mail: MailSettings = Field(default_factory=MailSettings, description="Connection policy, rendering and sending.")
     oauth: OAuthSettings = Field(default_factory=OAuthSettings, description="OAuth clients for Gmail and Microsoft mailboxes.")
     embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings, description="Semantic search model and thresholds.")

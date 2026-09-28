@@ -20,6 +20,9 @@ from mail import enums, models
         (enums.OAuthLinkStatus, models.OAuthLinkStatus),
         (enums.TaskStatus, models.TaskStatus),
         (enums.TaskLinkSource, models.TaskLinkSource),
+        (enums.MailChangeKind, models.MailChangeKind),
+        (enums.MailChangeState, models.MailChangeState),
+        (enums.CategorySync, models.CategorySync),
     ],
 )
 def test_enums_match_choices(enum, choices):

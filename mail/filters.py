@@ -9,7 +9,7 @@ import typing
 
 import strawberry
 import strawberry_django
-from django.db.models import Q, QuerySet
+from django.db.models import Exists, OuterRef, Q, QuerySet
 from django.utils import timezone
 from kante.types import Info
 from strawberry import auto
@@ -75,6 +75,25 @@ def _with_message(prefix: str, messages: QuerySet) -> Q:
     return Q(**{f"{prefix}id__in": messages.exclude(thread=None).values("thread_id")})
 
 
+def _live() -> QuerySet:
+    """Messages not deleted here."""
+    return models.Message.objects.filter(deleted_at=None)
+
+
+def _sync_state(value: enums.SyncState, prefix: str) -> Q:
+    failed = Q(**{f"{prefix}id__in": models.MailChange.objects.filter(state=models.MailChangeState.FAILED).exclude(message=None).values("message_id")})
+    pending = Q(**{f"{prefix}id__in": models.MailChange.objects.filter(state=models.MailChangeState.PENDING).exclude(message=None).values("message_id")})
+    pinned = models.Message.objects.filter(Exists(models.LocalPin.objects.filter(account_id=OuterRef("account_id"), message_key=OuterRef("message_key"))))
+    local = Q(**{f"{prefix}id__in": pinned.values("id")}) | Q(**{f"{prefix}deleted_at__isnull": False})
+    if value == enums.SyncState.FAILED:
+        return failed
+    if value == enums.SyncState.PENDING:
+        return pending & ~failed
+    if value == enums.SyncState.LOCAL:
+        return local & ~pending & ~failed
+    return ~failed & ~pending & ~local
+
+
 def _message_text(value: str, prefix: str = "") -> Q:
     return (
         Q(**{f"{prefix}subject__icontains": value})
@@ -136,6 +155,16 @@ class MessageFilter:
         return Q(**{f"{prefix}has_attachments": value})
 
     @strawberry_django.filter_field
+    def category(self, value: strawberry.ID, prefix: str) -> Q:
+        """Only messages in this category."""
+        return Q(**{f"{prefix}category_ids__contains": [int(value)]})
+
+    @strawberry_django.filter_field
+    def sync_state(self, value: enums.SyncState, prefix: str) -> Q:
+        """Only messages in this sync state (SYNCED, PENDING, LOCAL, FAILED; as `Message.syncState`)."""
+        return _sync_state(value, prefix)
+
+    @strawberry_django.filter_field
     def sender(self, value: str, prefix: str) -> Q:
         """Sender name or address contains this (case-insensitive)."""
         return Q(**{f"{prefix}sender_address__icontains": value}) | Q(**{f"{prefix}sender_name__icontains": value})
@@ -192,7 +221,7 @@ class ThreadFilter:
     @strawberry_django.filter_field
     def folder(self, value: strawberry.ID, prefix: str) -> Q:
         """Only conversations with a message in this folder."""
-        return Q(**{f"{prefix}id__in": models.Message.objects.filter(folder_id=value).values("thread_id")})
+        return Q(**{f"{prefix}id__in": _live().filter(folder_id=value).values("thread_id")})
 
     @strawberry_django.filter_field
     def ids(self, value: list[strawberry.ID], prefix: str) -> Q:
@@ -202,25 +231,30 @@ class ThreadFilter:
     @strawberry_django.filter_field
     def folder_role(self, value: enums.FolderRole, prefix: str) -> Q:
         """Only conversations with a message in a folder with this role (e.g. every INBOX)."""
-        return _with_message(prefix, models.Message.objects.filter(folder__role=value.value))
+        return _with_message(prefix, _live().filter(folder__role=value.value))
 
     @strawberry_django.filter_field
     def unread(self, value: bool, prefix: str) -> Q:
         """Only conversations with (without) an unread message."""
-        q = _with_message(prefix, models.Message.objects.exclude(flags__contains=["\\Seen"]))
+        q = _with_message(prefix, _live().exclude(flags__contains=["\\Seen"]))
         return q if value else ~q
 
     @strawberry_django.filter_field
     def flagged(self, value: bool, prefix: str) -> Q:
         """Only conversations with (without) a flagged message."""
-        q = _with_message(prefix, models.Message.objects.filter(flags__contains=["\\Flagged"]))
+        q = _with_message(prefix, _live().filter(flags__contains=["\\Flagged"]))
         return q if value else ~q
 
     @strawberry_django.filter_field
     def has_attachments(self, value: bool, prefix: str) -> Q:
         """Only conversations with (without) a message with attachments."""
-        q = _with_message(prefix, models.Message.objects.filter(has_attachments=True))
+        q = _with_message(prefix, _live().filter(has_attachments=True))
         return q if value else ~q
+
+    @strawberry_django.filter_field
+    def category(self, value: strawberry.ID, prefix: str) -> Q:
+        """Only conversations with a message in this category."""
+        return _with_message(prefix, _live().filter(category_ids__contains=[int(value)]))
 
     @strawberry_django.filter_field
     def task(self, info: Info, value: strawberry.ID, prefix: str) -> Q:
@@ -236,7 +270,7 @@ class ThreadFilter:
     @strawberry_django.filter_field(description="Only conversations with a message matching the text: the same substring and meaning search as `messages(filters: {search})`.")
     def search(self, info: Info, queryset: QuerySet, value: str, prefix: str) -> Q:
         # Only the messages of the conversations still in play (already scoped to what the caller sees).
-        candidates = models.Message.objects.filter(thread_id__in=queryset.values("id"))
+        candidates = _live().filter(thread_id__in=queryset.values("id"))
         candidates, predicate = hybrid_search(candidates, "", value, _message_text(value))
         return Q(**{f"{prefix}id__in": candidates.filter(predicate).order_by().values("thread_id")})
 
@@ -247,6 +281,51 @@ class ThreadOrder:
 
     last_message_at: auto
     message_count: auto
+
+
+@strawberry_django.filter_type(models.MailChange)
+class MailChangeFilter:
+    """Filtering options for queued changes."""
+
+    @strawberry_django.filter_field
+    def account(self, value: strawberry.ID, prefix: str) -> Q:
+        """Only changes of this mailbox."""
+        return Q(**{f"{prefix}account_id": value})
+
+    @strawberry_django.filter_field
+    def state(self, value: enums.MailChangeState, prefix: str) -> Q:
+        """Only changes in this state."""
+        return Q(**{f"{prefix}state": value.value})
+
+    @strawberry_django.filter_field
+    def kind(self, value: enums.MailChangeKind, prefix: str) -> Q:
+        """Only changes of this kind."""
+        return Q(**{f"{prefix}kind": value.value})
+
+    @strawberry_django.filter_field
+    def message(self, value: strawberry.ID, prefix: str) -> Q:
+        """Only changes of this message."""
+        return Q(**{f"{prefix}message_id": value})
+
+
+@strawberry_django.filter_type(models.Category)
+class CategoryFilter:
+    """Filtering options for categories."""
+
+    @strawberry_django.filter_field
+    def account(self, value: strawberry.ID, prefix: str) -> Q:
+        """Only categories of this mailbox."""
+        return Q(**{f"{prefix}account_id": value})
+
+    @strawberry_django.filter_field
+    def sync(self, value: enums.CategorySync, prefix: str) -> Q:
+        """Only LOCAL or KEYWORD categories."""
+        return Q(**{f"{prefix}sync": value.value})
+
+    @strawberry_django.filter_field
+    def search(self, value: str, prefix: str) -> Q:
+        """The name contains this (case-insensitive)."""
+        return Q(**{f"{prefix}name__icontains": value})
 
 
 @strawberry_django.filter_type(models.OutgoingMessage)

@@ -1,4 +1,8 @@
-"""Flags, moves and deletes change the server first, then the rows."""
+"""Flags, moves and deletes reach the server (pushed right after the request: the test settings have no undo windows).
+
+What happens before a push -- the undo window, local-only settings, surviving syncs -- is in
+``test_local_first.py``.
+"""
 
 import pytest
 
@@ -47,13 +51,20 @@ async def test_invalid_flags_are_refused(box_with_mail, aexecute):
 
 
 async def test_move_lands_in_the_destination(box_with_mail, aexecute, greenmail):
+    one = box_with_mail["messages"]["One"]
     moved = await aexecute(
-        'mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { subject folder { path } } }',
-        {"ids": [box_with_mail["messages"]["One"]], "f": box_with_mail["folders"]["Archive"]},
+        'mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id subject folder { path } syncState } }',
+        {"ids": [one], "f": box_with_mail["folders"]["Archive"]},
     )
-    assert moved.data["moveMessages"] == [{"subject": "One", "folder": {"path": "Archive"}}]
+    # The row keeps its id, and the push already happened (COPYUID gave it its new UID).
+    assert moved.data["moveMessages"] == [{"id": one, "subject": "One", "folder": {"path": "Archive"}, "syncState": "SYNCED"}]
     assert set(_server_flags(greenmail, box_with_mail["address"], "Archive")) == {"One"}
     assert set(_server_flags(greenmail, box_with_mail["address"], "INBOX")) == {"Two"}
+    row = await models.Message.objects.aget(id=one)
+    assert row.uid is not None
+    # A sync reads nothing twice.
+    await aexecute('mutation($id: ID!) { syncMailAccount(id: $id) { created } }', {"id": box_with_mail["id"]})
+    assert await models.Message.objects.filter(account_id=box_with_mail["id"], subject="One").acount() == 1
     assert await models.Message.objects.filter(account_id=box_with_mail["id"], folder__path="INBOX").acount() == 1
 
 
@@ -67,22 +78,18 @@ async def test_delete_moves_to_trash_then_expunges(box_with_mail, aexecute, gree
     assert not await models.Message.objects.filter(account_id=box_with_mail["id"], subject="Two").aexists()
 
 
-async def test_a_server_failure_changes_nothing_locally(box_with_mail, aexecute, greenmail):
-    """The folder was replaced on the server (new UIDVALIDITY): the change is refused and the row stays as it was."""
+async def test_a_server_failure_keeps_the_local_change(box_with_mail, aexecute, greenmail, sync):
+    """The folder was replaced on the server (new UIDVALIDITY): the flag stays here, the push fails -- and the next sync finds the message again."""
+    one = box_with_mail["messages"]["One"]
+    await aexecute('mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id } }', {"ids": [one], "f": box_with_mail["folders"]["Archive"]})
     with greenmail.imap(box_with_mail["address"]) as imap:
-        greenmail.recreate_folder(imap, "Archive", "Archive2")
-        imap.append("Archive", b"Subject: A\r\nMessage-ID: <a@x>\r\n\r\na\r\n")
-    moved = await aexecute(
-        'mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id } }',
-        {"ids": [box_with_mail["messages"]["One"]], "f": box_with_mail["folders"]["Archive"]},
-    )
-    # Moving *into* a replaced folder works (the destination is re-read)...
-    assert moved.data["moveMessages"]
-    # ...but touching a message whose folder's UIDVALIDITY moved on is refused.
-    archived = await models.Message.objects.aget(account_id=box_with_mail["id"], folder__path="Archive", subject="One")
-    with greenmail.imap(box_with_mail["address"]) as imap:
-        greenmail.recreate_folder(imap, "Archive", "Archive3")
-    result = await aexecute('mutation($ids: [ID!]!) { setMessageFlags(input: {messages: $ids, add: ["\\\\Flagged"]}) { id } }', {"ids": [str(archived.id)]}, allow_errors=True)
-    assert result.errors[0].extensions["code"] == "SERVER_ERROR"
-    await archived.arefresh_from_db()
-    assert "\\Flagged" not in archived.flags
+        greenmail.recreate_folder(imap, "Archive", "Archive3")  # "One" now lives in Archive3
+    flagged = await aexecute('mutation($ids: [ID!]!) { setMessageFlags(input: {messages: $ids, add: ["\\\\Flagged"]}) { isFlagged syncState changes { state errorCode } } }', {"ids": [one]})
+    assert flagged.data["setMessageFlags"] == [{"isFlagged": True, "syncState": "FAILED", "changes": [{"state": "FAILED", "errorCode": "MESSAGE_GONE"}]}]
+
+    # The sync reads Archive3 in; the change moves over to the message there and is pushed.
+    await sync(box_with_mail["id"])
+    assert "\\Flagged" in _server_flags(greenmail, box_with_mail["address"], "Archive3")["One"]
+    rows = [m async for m in models.Message.objects.filter(account_id=box_with_mail["id"], subject="One")]
+    assert [(r.folder_id is not None, "\\Flagged" in r.flags) for r in rows] == [(True, True)]
+    assert not await models.MailChange.objects.filter(account_id=box_with_mail["id"]).aexists()

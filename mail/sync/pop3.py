@@ -3,7 +3,8 @@
 Identity is the UIDL. POP3 has no folders, flags or dates to search by, so:
 
 * new messages are downloaded newest first (highest message number), ``sync.batch_size`` per run;
-* flags are local only (``\\Seen`` is set by a client, never read from the server);
+* flags are local only (``\\Seen`` is set by a client, never read from the server) -- every flag
+  change is a :class:`~mail.models.LocalPin`; only deletes are queued for the server;
 * with ``pop_leave_on_server`` the local copy mirrors the server: a message deleted there (by
   another client) is deleted here. Without it, a downloaded message is deleted on the server
   once its row is committed, and the local copy is the only one.
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from django.conf import settings
 from django.utils import timezone
 
-from mail import models
+from mail import models, overlay
 from mail.protocols.clients import GuardedPOP3, pop3_capabilities
 from mail.sync.store import Fetched, delete, max_message_bytes, prepare, write
 
@@ -102,9 +103,9 @@ def sync(client: GuardedPOP3, account: models.MailAccount) -> Pop3Result:
 
     if result.created or result.deleted:
         result.touched_folders.add(folder.id)
-    folder.total_count = folder.messages.count()
-    folder.unread_count = folder.messages.exclude(flags__contains=["\\Seen"]).count()
+    folder.total_count = folder.messages.filter(deleted_at=None).count()
     folder.backfill_done = not result.more
     folder.last_synced_at = timezone.now()
-    folder.save(update_fields=["total_count", "unread_count", "backfill_done", "last_synced_at"])
+    folder.save(update_fields=["total_count", "backfill_done", "last_synced_at"])
+    overlay.recount([folder.id])
     return result
