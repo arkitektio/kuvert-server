@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 #: Messages fetched (and written) per round trip.
 CHUNK = 25
+#: UIDs per CONDSTORE flag fetch (kept well under servers' command-line limits).
+FLAG_FETCH_CHUNK = 1000
 
 SPECIAL_USE = {
     b"\\Sent": models.FolderRole.SENT,
@@ -160,7 +162,12 @@ def _sync_flags(client: GuardedIMAPClient, folder: models.MailFolder, uidvalidit
     if condstore and folder.highest_modseq and highest_modseq:
         if highest_modseq == folder.highest_modseq:
             return 0
-        changed = client.fetch("1:*", ["FLAGS"], modifiers=[f"CHANGEDSINCE {folder.highest_modseq}"])
+        # Explicit UIDs, chunked: imapclient cannot fetch a range ("1:*" -- it filters its answer by
+        # the ids it was given), and a long UID list must still fit a server's command line.
+        uids = sorted(stored)
+        changed = {}
+        for start in range(0, len(uids), FLAG_FETCH_CHUNK):
+            changed.update(client.fetch(uids[start : start + FLAG_FETCH_CHUNK], ["FLAGS"], modifiers=[f"CHANGEDSINCE {folder.highest_modseq}"]))
     else:
         window = sorted(stored, reverse=True)[: int(settings.KUVERT_SYNC["flag_window"])]
         changed = client.fetch(window, ["FLAGS"]) if window else {}

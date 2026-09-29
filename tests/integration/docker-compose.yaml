@@ -25,6 +25,12 @@ services:
         - 3110   # POP3
         - 3995   # POP3S
         - 8080   # REST API
+   dovecot:
+      # A second IMAP server, for what GreenMail lacks: CONDSTORE/QRESYNC (and UIDPLUS, MOVE).
+      # The image's default config: any user name, password "pass", a mailbox per user.
+      image: dovecot/dovecot:2.3-latest
+      ports:
+        - 993    # IMAPS (self-signed)
    fakeoauth:
       # A stand-in for Google's and Microsoft's OAuth token endpoints (code + PKCE, refresh,
       # revocation). Built locally, never pulled.

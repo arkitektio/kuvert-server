@@ -53,6 +53,7 @@ class Stack:
     mail_api_url: str
     fakeoauth_url: str
     rustfs_port: int
+    dovecot_port: int
 
 
 def _wait(check, what: str, timeout: float = 60) -> None:  # noqa: ANN001
@@ -97,6 +98,10 @@ def backend_stack():
             pop = poplib.POP3_SSL("localhost", port("mail", 3995), context=_tls(), timeout=2)
             pop.quit()
 
+        def dovecot_ready() -> None:
+            with IMAPClient("localhost", port("dovecot", 993), ssl=True, ssl_context=_tls(), timeout=2) as client:
+                client.login("ready", "pass")
+
         def fakeoauth_ready() -> None:
             urllib.request.urlopen(f"http://localhost:{port('fakeoauth', 8000)}/_admin/health", timeout=1).read()
 
@@ -109,6 +114,7 @@ def backend_stack():
         _wait(db_ready, "postgres")
         _wait(mail_ready, "greenmail", timeout=120)
         _wait(rustfs_ready, "rustfs")
+        _wait(dovecot_ready, "dovecot")
         _wait(fakeoauth_ready, "fakeoauth", timeout=180)  # the first run builds its image
         yield Stack(
             db_port=port("db", 5432),
@@ -119,6 +125,7 @@ def backend_stack():
             mail_api_url=f"http://localhost:{port('mail', 8080)}",
             fakeoauth_url=f"http://localhost:{port('fakeoauth', 8000)}",
             rustfs_port=port("rustfs", 9000),
+            dovecot_port=port("dovecot", 993),
         )
 
 
@@ -327,6 +334,41 @@ def mailbox(aexecute, greenmail, backend_stack):
         }
         created = (await aexecute(CREATE, {"input": payload}, context=context)).data["createMailAccount"]
         return {**created, "address": address}
+
+    return _link
+
+
+class Dovecot:
+    """Users (any name, password ``pass``) and direct IMAP access to the stack's Dovecot."""
+
+    PASSWORD = "pass"
+
+    def __init__(self, stack: Stack) -> None:
+        self.stack = stack
+
+    def user(self) -> str:
+        return f"u{uuid.uuid4().hex[:12]}"
+
+    def imap(self, user: str) -> IMAPClient:
+        client = IMAPClient("localhost", self.stack.dovecot_port, ssl=True, ssl_context=_tls(), timeout=10)
+        client.login(user, self.PASSWORD)
+        return client
+
+
+@pytest.fixture(scope="session")
+def dovecot(backend_stack) -> Dovecot:
+    return Dovecot(backend_stack)
+
+
+@pytest.fixture
+def dovecot_mailbox(aexecute, dovecot):
+    """A fresh Dovecot user (CONDSTORE) linked as an IMAP mailbox, receive-only; returns ``{id, user, …}``."""
+
+    async def _link() -> dict:
+        user = dovecot.user()
+        payload = {"emailAddress": f"{user}@dovecot.test", "username": user, "password": Dovecot.PASSWORD, "protocol": "IMAP", "incoming": {"host": "localhost", "port": dovecot.stack.dovecot_port, "security": "TLS"}}
+        created = (await aexecute(CREATE, {"input": payload})).data["createMailAccount"]
+        return {**created, "user": user}
 
     return _link
 
