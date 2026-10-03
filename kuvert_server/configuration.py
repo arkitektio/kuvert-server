@@ -143,15 +143,15 @@ class EmbeddingsSettings(BaseModel):
     model_path: Optional[str] = Field(default=None, description="Directory holding the weights of `model` (save_pretrained layout). The Docker image bakes them under /opt/models and sets EMBEDDINGS__MODEL_PATH; unset, model2vec downloads from Hugging Face on first use.")
     dimensions: int = Field(default=256, description="Vector width of `model`. Also the width of the database column, so changing it is a migration. Checked against both at startup.")
     distance_threshold: float = Field(default=0.55, description="Cosine distance (0 identical, 1 unrelated) above which a row no longer counts as a semantic `search` hit.")
-    sweep_interval: int = Field(default=300, description="The default schedule (seconds) rekuest gives the `reembed_stale` action, which re-embeds rows whose `embedding_model` is not `model`.")
+    sweep_interval: int = Field(default=300, description="No longer used: `reembed_stale` (which re-embeds rows whose `embedding_model` is not `model`) is only offered as an action, and scheduling it is the organization's own automation. Kept so existing configs load.")
     sweep_batch_size: int = Field(default=200, description="Rows re-embedded per batch.")
 
 
 class RekuestHookSettings(BaseModel):
-    """This service as a HookAgent of the hub's rekuest (the vendored ``rekuest_service`` package)."""
+    """How this process reaches the hub's rekuest: as a service (``rekuest_service``) and as a hook agent (``rekuest_hook``)."""
 
     rekuest_url: str = Field(default="http://rekuest:80/rekuest", description="rekuest's base URL on the internal network; runs are reported to its `agi/http/<agent>` intake.")
-    service: str = Field(default="kuvert", description="The name rekuest knows this service by (its `rekuest.service_agents[].service`); signals are sent as it.")
+    service: str = Field(default="kuvert", description="The name rekuest knows this process by: its `rekuest.services[].name` (signals are sent as it) and its `rekuest.hook_agents[].name`.")
     max_skew: int = Field(default=30, description="Clock skew (seconds) tolerated on a signed request; tokens themselves live 60 s.")
 
 
@@ -172,7 +172,7 @@ class SyncSettings(BaseModel):
     folders_excluded: List[str] = Field(default_factory=lambda: ["JUNK", "ALL", "FLAGGED"], description="Folder roles (INBOX, SENT, DRAFTS, TRASH, ARCHIVE, JUNK, ALL, FLAGGED, OTHER) a newly discovered folder is not synced for (a user can still turn one on with `updateMailFolder`). ALL (Gmail's All Mail) and FLAGGED (Starred, Important) are virtual views that repeat messages of other folders, so syncing them duplicates mail.")
     max_messages_per_run: int = Field(default=1000, description="Messages one sync run fetches over all folders together; the rest follows on the next run. Keeps a first sync of a mailbox with many folders inside one request and one lease.")
     min_interval_seconds: int = Field(default=0, description="A sync of the same mailbox within this many seconds of the last one answers RATE_LIMITED. 0 disables it.")
-    scheduled_every_seconds: Optional[int] = Field(default=300, description="The default schedule rekuest gives the `sync_all_mailboxes` action. Null declares no default — the action then only runs when scheduled or triggered in rekuest.")
+    scheduled_every_seconds: Optional[int] = Field(default=300, description="No longer used: `sync_all_mailboxes` is only offered as an action, and scheduling it is the organization's own automation. Kept so existing configs load.")
     connect_timeout_seconds: float = Field(default=30, description="Socket timeout for IMAP, POP3 and SMTP connections.")
 
 
@@ -180,7 +180,7 @@ class WritebackSettings(BaseModel):
     """How changes made here reach the server (``mail.push``): every change is local first and queued."""
 
     push_inline: bool = Field(default=True, description="Try to push a change right after the request that made it (when it is due and no sync holds the mailbox). Off leaves everything to `flush_mail_changes` and syncs.")
-    flush_every_seconds: Optional[int] = Field(default=30, description="The default schedule rekuest gives the `flush_mail_changes` action. Null declares no default.")
+    flush_every_seconds: Optional[int] = Field(default=30, description="No longer used: `flush_mail_changes` is only offered as an action, and scheduling it is the organization's own automation. Kept so existing configs load.")
     undo_seconds_flags: int = Field(default=0, description="How long a flag change waits before it may be pushed (and can be undone).")
     undo_seconds_moves: int = Field(default=10, description="How long a move waits before it may be pushed (and can be undone).")
     undo_seconds_deletes: int = Field(default=30, description="How long a delete waits before it may be pushed (and can be undone).")

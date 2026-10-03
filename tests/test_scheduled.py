@@ -7,7 +7,8 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from datalayer.models import BigFileStore
-from kuvert_server.service import agent, service
+from kuvert_server.hook_agent import agent
+from kuvert_server.service import service
 from mail import models
 from mail.scheduled import purge_orphaned_stores, reembed_stale, sync_all_mailboxes
 
@@ -16,17 +17,16 @@ pytestmark = pytest.mark.django_db(transaction=True)
 MINE, THEIRS = "static_org", "other_org"
 
 
-def test_actions_are_registered_with_defaults(settings):
+def test_actions_are_offered_and_wired_to_nothing(settings):
     actions = agent.actions
     assert {"sync_all_mailboxes", "flush_mail_changes", "reembed_stale", "purge_orphaned_stores"} <= set(actions)
-    assert actions["sync_all_mailboxes"].default_interval == 300
-    # Every organization schedules them for itself, so each is handed the organization it runs for.
+    # An organization schedules them for itself, so each is handed the organization it runs for.
     assert all(action.takes_organization for action in actions.values())
+    assert all(set(action) == {"interface", "name", "description"} for action in agent.manifest()["actions"])
 
 
-def test_the_service_itself_offers_no_actions():
-    assert not hasattr(service, "action")
-    assert service.manifest()["actions"] == agent.manifest()
+def test_the_service_and_the_agent_are_separate_declarations():
+    assert "actions" not in service.manifest() and not hasattr(service, "action")
 
 
 async def test_sync_all_mailboxes(mailbox, greenmail):

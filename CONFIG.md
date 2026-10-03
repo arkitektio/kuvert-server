@@ -156,7 +156,7 @@ The authentikate library's own schema: `issuers` (the lok JWKS/RSA keys tokens a
 | `folders_excluded` | `SYNC__FOLDERS_EXCLUDED` | List[str] | `['JUNK', 'ALL', 'FLAGGED']` | Folder roles (INBOX, SENT, DRAFTS, TRASH, ARCHIVE, JUNK, ALL, FLAGGED, OTHER) a newly discovered folder is not synced for (a user can still turn one on with `updateMailFolder`). ALL (Gmail's All Mail) and FLAGGED (Starred, Important) are virtual views that repeat messages of other folders, so syncing them duplicates mail. |
 | `max_messages_per_run` | `SYNC__MAX_MESSAGES_PER_RUN` | int | `1000` | Messages one sync run fetches over all folders together; the rest follows on the next run. Keeps a first sync of a mailbox with many folders inside one request and one lease. |
 | `min_interval_seconds` | `SYNC__MIN_INTERVAL_SECONDS` | int | `0` | A sync of the same mailbox within this many seconds of the last one answers RATE_LIMITED. 0 disables it. |
-| `scheduled_every_seconds` | `SYNC__SCHEDULED_EVERY_SECONDS` | Optional[int] | `300` | The default schedule rekuest gives the `sync_all_mailboxes` action. Null declares no default — the action then only runs when scheduled or triggered in rekuest. |
+| `scheduled_every_seconds` | `SYNC__SCHEDULED_EVERY_SECONDS` | Optional[int] | `300` | No longer used: the action is only offered, and scheduling it is the organization's own automation in rekuest. Kept so existing configs load. |
 | `connect_timeout_seconds` | `SYNC__CONNECT_TIMEOUT_SECONDS` | float | `30` | Socket timeout for IMAP, POP3 and SMTP connections. |
 
 ### `writeback` (optional; defaults apply) — How changes made here (flags, categories, moves, deletes) reach the server (``mail.push``): every change is local first and queued.
@@ -164,7 +164,7 @@ The authentikate library's own schema: `issuers` (the lok JWKS/RSA keys tokens a
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
 | `push_inline` | `WRITEBACK__PUSH_INLINE` | bool | `True` | Try to push a change right after the request that made it (when it is due and no sync holds the mailbox). Off leaves everything to `flush_mail_changes` and syncs. |
-| `flush_every_seconds` | `WRITEBACK__FLUSH_EVERY_SECONDS` | Optional[int] | `30` | The default schedule rekuest gives the `flush_mail_changes` action. Null declares no default. |
+| `flush_every_seconds` | `WRITEBACK__FLUSH_EVERY_SECONDS` | Optional[int] | `30` | No longer used: the action is only offered, and scheduling it is the organization's own automation in rekuest. Kept so existing configs load. |
 | `undo_seconds_flags` | `WRITEBACK__UNDO_SECONDS_FLAGS` | int | `0` | How long a flag change waits before it may be pushed (and can be undone). |
 | `undo_seconds_moves` | `WRITEBACK__UNDO_SECONDS_MOVES` | int | `10` | How long a move waits before it may be pushed (and can be undone). |
 | `undo_seconds_deletes` | `WRITEBACK__UNDO_SECONDS_DELETES` | int | `30` | How long a delete waits before it may be pushed (and can be undone). |
@@ -234,7 +234,7 @@ Same block as rekuest/mikro/kabinet (the vendored ``embeddings`` package). Every
 | `model_path` | `EMBEDDINGS__MODEL_PATH` | Optional[str] | `None` | Directory holding the weights of `model` (save_pretrained layout). The Docker image bakes them under /opt/models and sets EMBEDDINGS__MODEL_PATH; unset, model2vec downloads from Hugging Face on first use. |
 | `dimensions` | `EMBEDDINGS__DIMENSIONS` | int | `256` | Vector width of `model`. Also the width of the database column, so changing it is a migration. Checked against both at startup. |
 | `distance_threshold` | `EMBEDDINGS__DISTANCE_THRESHOLD` | float | `0.55` | Cosine distance (0 identical, 1 unrelated) above which a row no longer counts as a semantic `search` hit. |
-| `sweep_interval` | `EMBEDDINGS__SWEEP_INTERVAL` | int | `300` | The default schedule (seconds) rekuest gives the `reembed_stale` action, which re-embeds rows whose `embedding_model` is not `model`. |
+| `sweep_interval` | `EMBEDDINGS__SWEEP_INTERVAL` | int | `300` | No longer used: the action is only offered, and scheduling it is the organization's own automation in rekuest. Kept so existing configs load. |
 | `sweep_batch_size` | `EMBEDDINGS__SWEEP_BATCH_SIZE` | int | `200` | Rows re-embedded per batch. |
 
 ### `datalayer` (optional block — absent turns the feature off) — S3 storage (the vendored ``datalayer`` app, as in mikro/elektro): raw messages, attachments, outgoing attachments.
@@ -294,12 +294,12 @@ Byte values accept ints or strings such as ``500GiB`` / ``2TB``.
 | `max_upload_bytes` | `DATALAYER__QUOTAS__ORGANIZATIONS__USERS__MAX_UPLOAD_BYTES` | Optional[ByteSize] | `None` | Largest single store (upload) a user may write. Advertised on the grant as `maxBytes`; a declared `fileSize` above it is refused. |
 | `max_user_bytes` | `DATALAYER__QUOTAS__ORGANIZATIONS__USERS__MAX_USER_BYTES` | Optional[ByteSize] | `None` | Total bytes one user may hold in one organization. A new upload grant is refused once it would pass this. |
 
-### `rekuest_hook` (optional block — absent turns the feature off) — This service as a HookAgent of the hub's rekuest (the vendored ``rekuest_service`` package).
+### `rekuest_hook` (optional block — absent turns the feature off) — How this process reaches the hub's rekuest: as a service (``rekuest_service``) and as a hook agent (``rekuest_hook``).
 
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
 | `rekuest_url` | `REKUEST_HOOK__REKUEST_URL` | str | `"http://rekuest:80/rekuest"` | rekuest's base URL on the internal network; runs are reported to its `agi/http/<agent>` intake. |
-| `service` | `REKUEST_HOOK__SERVICE` | str | `"kuvert"` | The name rekuest knows this service by (its `rekuest.service_agents[].service`); signals are sent as it. |
+| `service` | `REKUEST_HOOK__SERVICE` | str | `"kuvert"` | The name rekuest knows this process by: its `rekuest.services[].name` (signals are sent as it) and its `rekuest.hook_agents[].name`. |
 | `max_skew` | `REKUEST_HOOK__MAX_SKEW` | int | `30` | Clock skew (seconds) tolerated on a signed request; tokens live 60 s. |
 
 ### `instance` — this instance's key and the hub trust bundle
