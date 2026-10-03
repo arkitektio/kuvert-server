@@ -312,6 +312,7 @@ class Message(EmbeddedDescriptionMixin, models.Model):
     created_at = models.DateTimeField(auto_now_add=True, help_text="When the message was first stored.")
 
     embedding_source_fields = ("subject", "sender_name", "sender_address", "text_body")
+    embedding_organization_path = "account__organization"  # a message's organization is its mailbox's
 
     class Meta:
         constraints = [

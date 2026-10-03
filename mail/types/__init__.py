@@ -11,10 +11,11 @@ from django.conf import settings
 from django.db.models import F
 from django.utils import timezone
 from kante.types import Info
+from strawberry.scalars import JSON
 
 from datalayer import types as datalayer_types
 from mail import enums, filters, models, sanitize
-from mail.types._shared import OrgScoped, build_prescoped_queryset
+from mail.types._shared import DESCRIPTORS_DESCRIPTION, OrgScoped, build_prescoped_queryset, resolve_descriptors
 from mail.types.auth import Organization, User
 
 __all__ = [
@@ -187,6 +188,7 @@ class Message(OrgScoped):
     truncated: bool
     created_at: datetime.datetime
     attachments: List[Attachment] = strawberry_django.field(description="Attached files, inline images included (`inline`).")
+    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, description=DESCRIPTORS_DESCRIPTION)
 
     @classmethod
     def get_queryset(cls, queryset, info, **kwargs):  # noqa: ANN001, ANN206
@@ -276,6 +278,7 @@ class Thread(OrgScoped):
     subject: str
     last_message_at: Optional[datetime.datetime]
     message_count: int
+    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, description=DESCRIPTORS_DESCRIPTION)
 
     @strawberry_django.field(description="The conversation's messages, oldest first.")
     def messages(self, info: Info) -> List[Message]:
@@ -343,6 +346,7 @@ class OutgoingMessage(OrgScoped):
     created_at: datetime.datetime
     sent_at: Optional[datetime.datetime]
     attachments: List[datalayer_types.BigFileStore] = strawberry_django.field(description="The files attached.")
+    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, description=DESCRIPTORS_DESCRIPTION)
 
     @strawberry_django.field(description="To addresses.")
     def to(self) -> List[Address]:

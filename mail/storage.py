@@ -73,12 +73,18 @@ def _referenced() -> Q:
     )
 
 
-def purge_orphans(grace: timedelta = timedelta(days=1), limit: int = 500) -> int:
-    """Delete (bytes, then row) stores orphaned longer than ``grace`` that nothing references again."""
+def purge_orphans(grace: timedelta = timedelta(days=1), limit: int = 500, organization: str | None = None) -> int:
+    """Delete (bytes, then row) stores orphaned longer than ``grace`` that nothing references again.
+
+    Every organization's, or only those of ``organization`` (its slug): a store always belongs to
+    one. What counts as referenced is not narrowed, so a reference from anywhere keeps a store.
+    """
     if not enabled():
         return 0
     cutoff = timezone.now() - grace
     candidates = BigFileStore.objects.filter(orphaned_at__lt=cutoff)
+    if organization is not None:
+        candidates = candidates.filter(organization__slug=organization)
     # Re-attached in the meantime (a message moved back): clear the mark instead.
     candidates.filter(_referenced()).update(orphaned_at=None)
     purged = 0

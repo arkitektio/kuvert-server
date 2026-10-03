@@ -83,6 +83,19 @@ def test_the_manifest_declares_every_model_signal():
     assert {s["identifier"]: s["kinds"] for s in service.manifest()["signals"]} == EXPECTED
 
 
+def test_the_manifest_lists_what_kuvert_hosts_with_its_descriptors():
+    hosted = {s["identifier"]: s for s in service.manifest()["structures"]}
+    # Everything hosted is signalled (for team mailboxes only); nothing else is declared.
+    assert set(hosted) == set(EXPECTED)
+    assert hosted["@kuvert/outgoingmessage"]["label"] == "Outgoing Message"
+    assert hosted["@kuvert/message"]["descriptors"] == [{"key": "@kuvert/has_attachments", "type": "BOOL", "description": "Whether it has attachments, not counting inline images"}]
+    assert [(d["key"], d["type"]) for d in hosted["@kuvert/thread"]["descriptors"]] == [("@kuvert/message_count", "INT")]
+    assert [(d["key"], d["type"]) for d in hosted["@kuvert/outgoingmessage"]["descriptors"]] == [("@kuvert/status", "STRING")]
+    # The signal of a structure carries exactly the keys the structure declares.
+    for signal in service.manifest()["signals"]:
+        assert signal["descriptors"] == [d["key"] for d in hosted[signal["identifier"]]["descriptors"]]
+
+
 def _thread(visibility: str):
     from mail.models import MailAccount, Thread
 

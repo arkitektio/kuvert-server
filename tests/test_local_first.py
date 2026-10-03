@@ -76,8 +76,10 @@ async def test_a_change_shows_at_once_and_reaches_the_server_later(box, aexecute
     folder = (await aexecute('query($id: ID!) { mailFolder(id: $id) { unreadCount serverUnreadCount } }', {"id": box["folders"]["INBOX"]})).data["mailFolder"]
     assert folder == {"unreadCount": 2, "serverUnreadCount": 3}
 
-    # The scheduled flush (or any sync) pushes it.
-    assert (await flush_mail_changes())["pushed"] == 1
+    # The scheduled flush (or any sync) pushes it: the flush of the mailbox's organization, not another's.
+    assert await flush_mail_changes("other_org") == {"pushed": 0, "skipped": 0, "failed": 0}
+    assert "\\Seen" not in server(greenmail, box["address"])["One"]
+    assert (await flush_mail_changes("static_org"))["pushed"] == 1
     assert "\\Seen" in server(greenmail, box["address"])["One"]
     state = (await aexecute('query($id: ID!) { message(id: $id) { syncState serverFlags } }', {"id": one})).data["message"]
     assert state["syncState"] == "SYNCED" and "\\Seen" in state["serverFlags"]

@@ -263,14 +263,15 @@ the message through the mailbox's SMTP server, inside the request.
 
 ## Scheduled work (rekuest)
 
-With `rekuest_hook` configured, the hub's rekuest runs these actions:
+With `rekuest_hook` configured, the hub's rekuest runs these actions of kuvert's HookAgent. Every
+organization has the agent and its own schedules, so a run does one organization's share of the work:
 
 | Action | Default schedule | What it does |
 |---|---|---|
-| `sync_all_mailboxes` | every 300 s | one sync pass of every ACTIVE mailbox (mailboxes being synced are skipped) |
-| `flush_mail_changes` | every 30 s | pushes the due changes made here; only mailboxes with some are connected to |
-| `reembed_stale` | every `embeddings.sweep_interval` | embeds messages whose vector is missing or from another model |
-| `purge_orphaned_stores` | every 6 h (with a datalayer) | deletes stored raw messages and attachments whose messages have been gone for a day |
+| `sync_all_mailboxes` | every 300 s | one sync pass of every ACTIVE mailbox of the organization (mailboxes being synced are skipped) |
+| `flush_mail_changes` | every 30 s | pushes the organization's due changes made here; only mailboxes with some are connected to |
+| `reembed_stale` | every `embeddings.sweep_interval` | embeds the organization's messages whose vector is missing or from another model |
+| `purge_orphaned_stores` | every 6 h (with a datalayer) | deletes the organization's stored raw messages and attachments whose messages have been gone for a day |
 
 ## Development
 
