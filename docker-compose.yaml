@@ -9,7 +9,7 @@ services:
       - "arkitekt.default.service=db"
   kuvert:
     build: .
-    command: bash run.sh
+    command: sh -c "python -m arkitekt_service migrate && bash run.sh"
     ports:
     - 8889:80
     labels:
