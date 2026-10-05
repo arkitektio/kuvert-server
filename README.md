@@ -56,8 +56,8 @@ the schema and never written to history rows.
 ## Syncing
 
 - **Request/response only.** A mailbox syncs when a client calls `syncMailAccount(id)` or when
-  the hub's rekuest runs `sync_all_mailboxes` (every 5 min by default). Nothing loops here, and
-  IMAP IDLE is not used.
+  the hub's rekuest runs the `sync_all_mailboxes` action (on whatever schedule the organization
+  set up there; none by default). Nothing loops here, and IMAP IDLE is not used.
 - **A lease per mailbox.** Two syncs never run at once on any number of replicas; the second
   answers `SYNC_IN_PROGRESS`. A crashed sync frees the mailbox when its lease runs out.
 - **Chunked.** Each run takes at most `sync.batch_size` messages per folder and `sync.max_messages_per_run` in total, renewing its lease as it goes:
@@ -122,7 +122,8 @@ as they are now. The server learns of the change afterwards, from a queue of cha
 
 - **Right after the request.** Pushed at once when the change is due
   (`writeback.push_inline`).
-- **Scheduled.** Otherwise pushed by `flush_mail_changes` (every 30 s).
+- **By rekuest.** Otherwise pushed by the `flush_mail_changes` action, whenever the
+  organization's automation runs it.
 - **Next sync.** Or pushed by the next sync.
 - **Undo windows.** A change is not pushed before its undo window ends (`writeback.undo_seconds_*`;
   10 s for moves, 30 s for deletes, none for flags). Until then, `undoMailChanges` takes it back.
@@ -179,7 +180,7 @@ Categories belong to a mailbox and are shared by everyone who sees it
 ## Limitations
 
 - **Latency.** Other mail clients see a change only after its undo window and the next push (at
-  once, or within `writeback.flush_every_seconds`).
+  once, or at the next `flush_mail_changes` run or sync).
 - **Local wins, per flag.** If another client changes the same flag between the change here and
   its push, the change here wins. Other flags are unaffected.
 - **Pins diverge from the server** until `revertMessagesToServer`, or until the push setting is
@@ -261,32 +262,66 @@ the message through the mailbox's SMTP server, inside the request.
   `MailErrorCode` enum: `AUTH_FAILED`, `CONSENT_EXPIRED`, `CONNECTION_FAILED`, `TLS_FAILED`,
   `HOST_NOT_ALLOWED`, `SYNC_IN_PROGRESS`, `SEND_REJECTED`, `UNSUPPORTED_BY_PROTOCOL`, …
 
-## Scheduled work (rekuest)
+## Hub integration
 
-With `rekuest_hook` configured, the hub's rekuest runs these actions of kuvert's HookAgent. Every
-organization has the agent and its own schedules, so a run does one organization's share of the work:
+Declared in [`kuvert_server/contract.py`](kuvert_server/contract.py):
 
-| Action | Default schedule | What it does |
-|---|---|---|
-| `sync_all_mailboxes` | every 300 s | one sync pass of every ACTIVE mailbox of the organization (mailboxes being synced are skipped) |
-| `flush_mail_changes` | every 30 s | pushes the organization's due changes made here; only mailboxes with some are connected to |
-| `reembed_stale` | every `embeddings.sweep_interval` | embeds the organization's messages whose vector is missing or from another model |
-| `purge_orphaned_stores` | every 6 h (with a datalayer) | deletes the organization's stored raw messages and attachments whose messages have been gone for a day |
+- **Scopes**: `kuvert_read`, `kuvert_write`.
+- **Needs**: rekuest 6 or newer, an instance key, `bigfile` storage, tokens issued by lok, and
+  a mounted Fernet key file. Without the key the contract refuses to render a config.
+
+kuvert is known to the hub's rekuest in two separate ways. As a **service**
+(`_rekuest/service`) it hosts the structures `@kuvert/message`, `@kuvert/thread` and
+`@kuvert/outgoingmessage` ([`kuvert_server/service.py`](kuvert_server/service.py)). As a
+**hook agent** (`_rekuest/hook`) it offers the actions below.
+
+## Unattended work (rekuest)
+
+With `rekuest_hook` configured, kuvert offers these actions to the hub's rekuest
+([`mail/scheduled.py`](mail/scheduled.py)). Every organization has the agent, so a run does one
+organization's share of the work:
+
+| Action | What it does |
+|---|---|
+| `sync_all_mailboxes` | one sync pass of every ACTIVE mailbox of the organization (mailboxes being synced are skipped) |
+| `flush_mail_changes` | pushes the organization's due changes made here; only mailboxes with some are connected to |
+| `reembed_stale` | embeds the organization's messages whose vector is missing or from another model |
+| `purge_orphaned_stores` | deletes the organization's stored raw messages and attachments nothing references any more |
+
+The actions are only offered. Nothing schedules them by default: whether and how often one runs
+is the organization's own automation in rekuest (a schedule, a trigger, or by hand). Without a
+schedule, mail arrives only when a client calls `syncMailAccount`.
+
+## Running
+
+The image is `jhnnsrs/kuvert`. It has no default command, and starting it takes two steps:
+
+```bash
+python -m arkitekt_service migrate   # wait for the database, migrate, ensureadmin
+bash run.sh                          # serve on :80 (daphne), and nothing else
+```
+
+`run-debug.sh` does both in one go with Django's autoreloading server, for development.
+
+It needs Postgres with pgvector ([`jhnnsrs/daten`](https://github.com/arkitektio/daten-server))
+and Redis, plus S3 (RustFS) for raw messages and attachments. GraphQL is served at `/graphql`,
+with the SDL at `/schema`.
 
 ## Development
 
 ```bash
 uv sync
-uv run --no-sync pytest       # brings up postgres, GreenMail, RustFS and a fake OAuth server via dokker
+uv run --no-sync pytest       # brings up the stack below via dokker; needs Docker
 uv run python manage.py validate_settings
 ```
 
-The suite runs against a real stack:
+The suite runs against a real stack, from `tests/integration/docker-compose.yaml`:
 
 - Postgres with pgvector.
 - [GreenMail](https://greenmail-mail-test.github.io/greenmail/): real SMTP, IMAP and POP3 over
   TLS with authentication. Tests seed mail over SMTP and change mailboxes over IMAP behind the
   service's back.
+- Dovecot, a second IMAP server, for what GreenMail lacks: CONDSTORE/QRESYNC, UIDPLUS and MOVE.
 - RustFS for S3.
 - `tests/integration/fakeoauth`: a strict stand-in for Google's and Microsoft's token endpoints
   (code + PKCE, refresh, rotation, revocation).
@@ -296,8 +331,10 @@ Nothing in the service is mocked.
 Configuration is documented in [CONFIG.md](CONFIG.md). The Fernet key is mounted, never committed
 (`*.fernet` is git-ignored). Rotate it with `manage.py rotate_secrets`.
 
-### Connecting from an app
+## Releases
 
-```bash
-arkitekt-server service connect --url http://localhost:8000 --identifier live.arkitekt.kuvert
-```
+Releases are tags: a push to `main` cuts a stable version, a push to `next` a release
+candidate. Each one publishes `jhnnsrs/kuvert` under its version (`X.Y.Z`, `X.Y`, `X`), plus
+`latest` from `main` and `next` from `next`. The `version` in `pyproject.toml` is a
+placeholder. Release notes are on
+[GitHub Releases](https://github.com/arkitektio/kuvert-server/releases).
