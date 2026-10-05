@@ -1,4 +1,4 @@
-"""The actions of kuvert's hook agent: work the hub's rekuest can ask for (vendored ``rekuest_hook``).
+"""The actions of kuvert's hook agent: work the hub's rekuest can ask for (``arkitekt_service.hook``).
 
 Every organization has the agent, so each action is handed the slug of the organization the run
 is for and does that organization's share of the work, nothing else:

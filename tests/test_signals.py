@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from joserfc.jwk import OKPKey
 
-from rekuest_service import trust
+from arkitekt_service import trust
 from kuvert_server.service import service
 
 EXPECTED = {
