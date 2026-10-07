@@ -1,12 +1,11 @@
-"""kuvert as a service of the hub: what exists here (``arkitekt_service.service``).
+"""kuvert as a service of the hub: the models and the code behind what its contract says it hosts.
 
-Two separate declarations, read by rekuest from the service's manifest (``*service.urls`` in
-``urls.py``) and catalogued hub-wide:
-
-* the **structures** kuvert hosts, and the descriptors of their objects. The GraphQL types answer
-  ``descriptors`` from the same declarations (``mail.types``);
-* the **signals** it emits: which saves and deletes are announced, with no emit in the mutations.
-  Users' triggers are checked against the kinds and descriptor keys declared here.
+What exists here (the structures, the descriptors of their objects, the signals and their kinds)
+is declared once, as data, in ``kuvert_server.contract`` (``hosts``), so that a hub knows it from the
+image. This module only binds it: each structure to its model and to what computes its
+descriptors, each signal to the saves and deletes that send it. A structure the contract does not
+declare cannot be bound, and one it declares that nothing binds here stops the service at its
+start. The GraphQL types answer ``descriptors`` from the same binding (``mail.types``).
 
 Hosting announces nothing by itself: a structure with no signal below is hosted silently.
 
@@ -20,33 +19,21 @@ accounts are personal too and get no signals.
 """
 
 from mail import models
-from arkitekt_service.service import Descriptor, Service, organization_of
+from arkitekt_service.service import Service, organization_of
 
-service = Service("kuvert", description="Mail: team mailboxes, their threads and outgoing mail.")
+from kuvert_server.contract import contract
+
+service = Service("kuvert", hosts=contract.description.hosts, description="Mail: team mailboxes, their threads and outgoing mail.")
 
 
 # --- Structures: what kuvert hosts ----------------------------------------------------
 
-message = service.structure(
-    models.Message,
-    "@kuvert/message",
-    descriptors=(Descriptor("@kuvert/has_attachments", "BOOL", "Whether it has attachments, not counting inline images"),),
-    describe=lambda message: {"@kuvert/has_attachments": bool(message.has_attachments)},
-    description="A mail message in one folder of a mailbox.",
-)
-thread = service.structure(
-    models.Thread,
-    "@kuvert/thread",
-    descriptors=(Descriptor("@kuvert/message_count", "INT", "How many messages the conversation holds"),),
-    describe=lambda thread: {"@kuvert/message_count": thread.message_count},
-    description="A conversation: the messages of a mailbox that answer one another.",
-)
+message = service.structure(models.Message, "@kuvert/message", describe=lambda message: {"@kuvert/has_attachments": bool(message.has_attachments)})
+thread = service.structure(models.Thread, "@kuvert/thread", describe=lambda thread: {"@kuvert/message_count": thread.message_count})
 outgoingmessage = service.structure(
     models.OutgoingMessage,
     "@kuvert/outgoingmessage",
-    descriptors=(Descriptor("@kuvert/status", "STRING", "Where the message is: SENDING, SENT or FAILED"),),
     describe=lambda outgoing: {"@kuvert/status": str(outgoing.status)},
-    description="A message sent through a mailbox's SMTP server.",
 )
 
 
@@ -60,24 +47,6 @@ def _team_mailbox(obj, kind: str) -> bool:
     return obj.account.visibility == models.Visibility.ORGANIZATION
 
 
-service.model_signal(
-    message,
-    kinds=("CREATED",),
-    organization=on_account,
-    when=_team_mailbox,
-    description="Mail arrived in a team mailbox.",
-)
-service.model_signal(
-    thread,
-    kinds=("CREATED", "UPDATED"),
-    organization=on_account,
-    when=_team_mailbox,
-    description="A conversation in a team mailbox started or grew.",
-)
-service.model_signal(
-    outgoingmessage,
-    kinds=("CREATED", "UPDATED"),
-    organization=on_account,
-    when=_team_mailbox,
-    description="Mail from a team mailbox was queued, sent or failed.",
-)
+service.model_signal(message, organization=on_account, when=_team_mailbox)
+service.model_signal(thread, organization=on_account, when=_team_mailbox)
+service.model_signal(outgoingmessage, organization=on_account, when=_team_mailbox)
