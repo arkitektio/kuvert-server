@@ -103,6 +103,7 @@ contract = Contract(
     debug=Start(("python", "manage.py", "runserver", "0.0.0.0:80")),
     jobs={
         "ensureadmin": Job(("ensureadmin",), "Create the operator account the config names"),
+        "rotate_secrets": Job(("rotate_secrets",), "Re-encrypt every stored mailbox credential with the first key of the key file"),
     },
     setup=("ensureadmin",),
 )
