@@ -122,10 +122,27 @@ class SyncState(str, Enum):
     FAILED = "FAILED"
 
 
-@strawberry.enum(description='Lifecycle of an OAuth link attempt. PENDING: Waiting for the user to approve at the provider; COMPLETED: Approved; the mailbox is linked.')
+@strawberry.enum(description='Lifecycle of an OAuth link attempt. PENDING: Waiting for the user to approve at the provider; COMPLETED: Approved; the mailbox is linked; FAILED: The provider refused, or the login ran out; CANCELLED: The user dropped the login before it was finished.')
 class OAuthLinkStatus(str, Enum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+@strawberry.enum(description="How a started login finishes.")
+class AuthFinish(str, Enum):
+    REDIRECT = "REDIRECT"  # the provider redirects to redirectUrl with ?code&state; the client calls completeAuth with both
+    POLL = "POLL"  # the client calls completeAuth with the state every `interval` seconds until it is not PENDING
+
+
+@strawberry.enum(description="Where a login is.")
+class AuthStatus(str, Enum):
+    PENDING = "PENDING"
+    DONE = "DONE"
+    FAILED = "FAILED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
 
 
 @strawberry.enum(description="Where a task is. OPEN: To do; DONE: Done; DISMISSED: Dropped without doing it.")

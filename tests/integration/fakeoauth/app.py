@@ -10,10 +10,13 @@ and a refresh token can be revoked (then ``invalid_grant``). The browser leg is 
 * ``POST /_admin/approve``   ``{client_id, redirect_uri, code_challenge, scope, email, name, access_token}`` → ``{code}``
 * ``POST /_admin/revoke``    ``{email}``: every refresh token of that address stops working
 * ``POST /_admin/config``    ``{expires_in, rotate_refresh}``
+* ``POST /_admin/hold`` / ``/_admin/release``  park token requests until released
+* ``GET  /_admin/held``      how many requests are parked right now
 * ``GET  /_admin/log``       every token request (grant type, client)
 * ``GET  /_admin/health``
 """
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -21,7 +24,8 @@ import secrets
 
 from aiohttp import web
 
-STATE: dict = {"clients": {}, "codes": {}, "refresh": {}, "revoked": set(), "config": {"expires_in": 3600, "rotate_refresh": False}, "log": []}
+STATE: dict = {"clients": {}, "codes": {}, "refresh": {}, "revoked": set(), "config": {"expires_in": 3600, "rotate_refresh": False}, "log": [], "hold": asyncio.Event(), "held": 0}
+STATE["hold"].set()
 
 
 def _b64(data: dict) -> str:
@@ -49,6 +53,12 @@ async def token(request: web.Request) -> web.Response:
     form = await request.post()
     client_id, secret = form.get("client_id"), form.get("client_secret")
     STATE["log"].append({"grant_type": form.get("grant_type"), "client_id": client_id})
+    if not STATE["hold"].is_set():
+        STATE["held"] += 1
+        try:
+            await STATE["hold"].wait()
+        finally:
+            STATE["held"] -= 1
     client = STATE["clients"].get(client_id)
     if client is None or (client.get("client_secret") and client["client_secret"] != secret):
         return _error("invalid_client", "Unknown client or wrong secret.", 401)
@@ -108,6 +118,20 @@ async def config(request: web.Request) -> web.Response:
     return web.json_response(STATE["config"])
 
 
+async def hold(request: web.Request) -> web.Response:
+    STATE["hold"].clear()
+    return web.json_response({"ok": True})
+
+
+async def release(request: web.Request) -> web.Response:
+    STATE["hold"].set()
+    return web.json_response({"ok": True})
+
+
+async def held(request: web.Request) -> web.Response:
+    return web.json_response({"held": STATE["held"]})
+
+
 async def log(request: web.Request) -> web.Response:
     return web.json_response({"log": STATE["log"]})
 
@@ -124,6 +148,9 @@ app.add_routes(
         web.post("/_admin/approve", approve),
         web.post("/_admin/revoke", revoke),
         web.post("/_admin/config", config),
+        web.post("/_admin/hold", hold),
+        web.post("/_admin/release", release),
+        web.get("/_admin/held", held),
         web.get("/_admin/log", log),
         web.get("/_admin/health", health),
     ]

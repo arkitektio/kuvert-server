@@ -43,12 +43,19 @@ bank's link flow:
 1. `startOAuthLink(input: {provider: GMAIL, redirectUrl?})` returns an `AuthSession`. Open its
    `openUrl`.
 2. The provider redirects to `redirectUrl?code=…&state=…`.
-3. Call `completeOAuthLink(input: {code, state})`. A state is accepted only from the member who
-   started it, in the same organization, once, and before it expires.
+3. Call `completeAuth(input: {state, code})`. It answers with the `AuthSession`: `status` `DONE`
+   and `result` (the linked mailbox), or `FAILED` / `EXPIRED` with `errorCode` and `errorMessage`.
+
+The login follows the external auth flow contract every service shares: `completeAuth`,
+`resumeAuth(state)`, `cancelAuth(state)` and `authSession(state)`. A state is only answered to
+the member who started the login, in their organization. The code is exchanged once: a settled
+login is answered again as it is, so `completeAuth` can be called twice. A provider's refusal
+is passed on with `completeAuth(input: {state, error, errorDescription})`.
 
 The refresh token is stored encrypted, and access tokens are refreshed before use. If the user
 revokes access, the mailbox turns `NEEDS_REAUTH` (`CONSENT_EXPIRED`). To fix it, call
-`startOAuthLink(input: {provider, account})`, which re-links the same mailbox.
+`startOAuthLink(input: {provider, account})`, which re-links the same mailbox (its session
+names the mailbox in `result` from the start, and the mailbox carries it as `pendingAuth`).
 
 Passwords and tokens are Fernet-encrypted at rest (`secrets.key_path`). They are never part of
 the schema and never written to history rows.

@@ -96,6 +96,10 @@ class TokenSet:
     id_token: str | None
 
 
+class ProviderUnreachable(MailError):
+    """The provider gave no answer at all: whatever was asked may still be good."""
+
+
 class TokenRevoked(MailError):
     """The refresh token was revoked or ran out (``invalid_grant``)."""
 
@@ -180,9 +184,10 @@ def _post(client: OAuthClient, form: dict[str, str]) -> dict:
         description = body.get("error_description") or ""
         if kind == "invalid_grant":
             raise TokenRevoked(f"The provider refused the grant: {description or kind}") from error
-        raise MailError(f"The OAuth provider answered {kind}: {description}".strip(": "), MailErrorCode.PROVIDER_ERROR) from error
+        failure = ProviderUnreachable if error.code >= 500 or error.code == 429 else MailError  # no answer about the request itself
+        raise failure(f"The OAuth provider answered {kind}: {description}".strip(": "), MailErrorCode.PROVIDER_ERROR) from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise MailError(f"The OAuth provider could not be reached: {error}", MailErrorCode.PROVIDER_ERROR) from error
+        raise ProviderUnreachable(f"The OAuth provider could not be reached: {error}", MailErrorCode.PROVIDER_ERROR) from error
 
 
 def _tokens(body: dict) -> TokenSet:

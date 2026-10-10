@@ -411,6 +411,15 @@ class FakeOAuth:
     def config(self, **values) -> None:  # noqa: ANN003
         _post(self.url + "/_admin/config", values)
 
+    def hold(self) -> None:
+        _post(self.url + "/_admin/hold", {})
+
+    def release(self) -> None:
+        _post(self.url + "/_admin/release", {})
+
+    def held(self) -> int:
+        return _get(self.url + "/_admin/held")["held"]
+
     def log(self) -> list[dict]:
         return _get(self.url + "/_admin/log")["log"]
 
@@ -434,6 +443,7 @@ def fakeoauth(backend_stack, settings) -> FakeOAuth:
     fake = FakeOAuth(backend_stack.fakeoauth_url)
     fake.config(expires_in=3600, rotate_refresh=False)
     yield fake
+    fake.release()  # never leave token requests parked for the next test
     fake.config(expires_in=3600, rotate_refresh=False)
 
 

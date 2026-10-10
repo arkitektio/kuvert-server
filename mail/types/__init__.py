@@ -99,6 +99,16 @@ class MailAccount(OrgScoped):
     folders: List["MailFolder"] = strawberry_django.field(description="The mailbox's folders (a POP3 mailbox has one, its INBOX).")
     categories: List["Category"] = strawberry_django.field(description="The mailbox's categories.")
 
+    @strawberry_django.field(description="The re-link of this mailbox still to be finished, when you started it and it is PENDING: continue it with `resumeAuth(state)`. Null otherwise.")
+    def pending_auth(self, info: Info) -> Optional["AuthSession"]:
+        link = (
+            models.OAuthLink.objects.filter(account_id=self.id, creator_id=info.context.request.user.id, status=models.OAuthLinkStatus.PENDING, expires_at__gt=timezone.now())
+            .select_related("account")
+            .order_by("-created_at")
+            .first()
+        )
+        return AuthSession.of(link) if link is not None else None
+
     @strawberry_django.field(description="Whether the caller linked the mailbox (and so may change its credentials, sharing, or delete it).")
     def is_owner(self, info: Info) -> bool:
         return self.creator_id == info.context.request.user.id  # type: ignore[attr-defined]
@@ -365,19 +375,60 @@ class OutgoingMessage(OrgScoped):
         return [RefusedRecipient(address=address, code=int(value[0]), message=str(value[1])) for address, value in (self.refused or {}).items()]  # type: ignore[attr-defined]
 
 
-@strawberry.type(description="A started OAuth login: open `openUrl`; the provider redirects to `redirectUrl` with `?code&state`; call `completeOAuthLink` with them.")
+@strawberry.type(description="A Structure: what the login linked, so the app can open its page.")
+class AuthResult:
+    identifier: str
+    id: strawberry.ID
+    label: Optional[str] = None
+
+
+#: What a finished login links, under the identifier the app opens a mailbox's page by.
+ACCOUNT = "@kuvert/account"
+
+
+@strawberry.type(description="A login at an external provider, the same shape in every service. Open `openUrl` in the user's browser; then, by `finish`: REDIRECT — the provider redirects to `redirectUrl` with `code` and `state`, call `completeAuth` with both; POLL — call `completeAuth` with the `state` every `interval` seconds until `status` is not PENDING.")
 class AuthSession:
-    state: str
-    open_url: str
-    expires_at: datetime.datetime
-    finish: str = strawberry.field(description="How the login finishes: REDIRECT (catch the redirect, then `completeOAuthLink`).")
-    redirect_url: str
-    provider: enums.Provider
-    account: Optional[MailAccount] = strawberry.field(description="The mailbox this login re-links, if it does.")
+    state: str = strawberry.field(description="Opaque, unguessable, single-use, stored server-side. THE handle of the login.")
+    status: enums.AuthStatus
+    finish: enums.AuthFinish
+    open_url: str = strawberry.field(description="https. What the app opens in the user's browser.")
+    expires_at: datetime.datetime = strawberry.field(description="Until when the first approval can happen.")
+    redirect_url: Optional[str] = strawberry.field(default=None, description="REDIRECT: where the provider sends the browser back to (the relay URL).")
+    interval: Optional[int] = strawberry.field(default=None, description="POLL: seconds between two completeAuth calls.")
+    user_code: Optional[str] = strawberry.field(default=None, description="POLL: the code the user confirms on the provider's page.")
+    step: Optional[str] = strawberry.field(default=None, description="Null until the first approval; then what is still awaited, e.g. MFA.")
+    error_code: Optional[str] = strawberry.field(default=None, description="FAILED: machine-readable, the service's own error codes.")
+    error_message: Optional[str] = strawberry.field(default=None, description="FAILED: one sentence for the user.")
+    result: Optional[AuthResult] = strawberry.field(default=None, description="DONE: what was linked. May be set earlier when it already exists (a relink).")
 
     @classmethod
     def of(cls, link: models.OAuthLink) -> "AuthSession":
-        return cls(state=link.state, open_url=link.auth_url, expires_at=link.expires_at, finish="REDIRECT", redirect_url=link.redirect_url, provider=enums.Provider(link.provider), account=link.account)  # type: ignore[arg-type]
+        """The login a stored link is: where it is follows from its status and the clock."""
+        from mail.oauth.linking import is_expired
+
+        code, message = link.error_code, link.error_message
+        if link.status == models.OAuthLinkStatus.COMPLETED:
+            status = enums.AuthStatus.DONE
+        elif link.status == models.OAuthLinkStatus.CANCELLED:
+            status = enums.AuthStatus.CANCELLED
+        elif is_expired(link):
+            status, code, message = enums.AuthStatus.EXPIRED, models.MailErrorCode.CODE_EXPIRED.value, "The login was not completed in time."
+        elif link.status == models.OAuthLinkStatus.PENDING:
+            status = enums.AuthStatus.PENDING
+        else:
+            status = enums.AuthStatus.EXPIRED if code == models.MailErrorCode.CODE_EXPIRED else enums.AuthStatus.FAILED
+        account = link.account  # set from the start for a re-link, else once the mailbox is linked
+        return cls(
+            state=link.state,
+            status=status,
+            finish=enums.AuthFinish.REDIRECT,
+            open_url=link.auth_url,
+            expires_at=link.expires_at,
+            redirect_url=link.redirect_url,
+            error_code=code if status in (enums.AuthStatus.FAILED, enums.AuthStatus.EXPIRED) else None,
+            error_message=message if status in (enums.AuthStatus.FAILED, enums.AuthStatus.EXPIRED) else None,
+            result=AuthResult(identifier=ACCOUNT, id=strawberry.ID(str(account.id)), label=account.email_address) if account is not None else None,
+        )
 
 
 @strawberry.type(description="Server settings of a well-known mail provider, to fill in a new mailbox.")

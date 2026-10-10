@@ -78,6 +78,7 @@ class Query:
     outgoing_message: types.OutgoingMessage = field(resolver=queries.outgoing_message, description="A sent message by id.")
     mail_presets: list[types.MailPreset] = field(resolver=queries.mail_presets, description="Server settings of well-known providers (the one for `address`, when given).")
     oauth_providers: list[enums.Provider] = field(resolver=queries.oauth_providers, name="oauthProviders", description="Providers this deployment can link through OAuth.")
+    auth_session: types.AuthSession = field(resolver=mutations.auth_session, description="Where a login is. No side effect.")
 
 
 @strawberry.type
@@ -94,9 +95,9 @@ class Mutation:
     sync_mail_account = mutation(resolver=mutations.sync_mail_account, description="Sync a mailbox now.")
     # OAuth (Gmail, Microsoft)
     start_oauth_link = mutation(resolver=mutations.start_oauth_link, name="startOAuthLink", description="Start linking (or re-linking) a mailbox through OAuth.")
-    complete_oauth_link = mutation(resolver=mutations.complete_oauth_link, name="completeOAuthLink", description="Finish an OAuth login with the redirect's code and state.")
-    resume_oauth_link = mutation(resolver=mutations.resume_oauth_link, name="resumeOAuthLink", description="The caller's pending OAuth login again.")
-    cancel_oauth_link = mutation(resolver=mutations.cancel_oauth_link, name="cancelOAuthLink", description="Drop the caller's pending OAuth login.")
+    complete_auth = mutation(resolver=mutations.complete_auth, description="REDIRECT: finish with the code. POLL: advance one step; call until not PENDING.")
+    resume_auth = mutation(resolver=mutations.resume_auth, description="The same login again (a fresh openUrl if the old one cannot be reused).")
+    cancel_auth = mutation(resolver=mutations.cancel_auth, description="Drop a login that will not be finished. Idempotent.")
     # Messages
     set_message_flags = mutation(resolver=mutations.set_message_flags, description="Add and remove flags of messages.")
     mark_messages_read = mutation(resolver=mutations.mark_messages_read, description="Mark messages read or unread.")

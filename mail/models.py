@@ -167,6 +167,8 @@ class OAuthLinkStatus(models.TextChoices):
 
     PENDING = "PENDING", "Waiting for the user to approve at the provider"
     COMPLETED = "COMPLETED", "Approved; the mailbox is linked"
+    FAILED = "FAILED", "The provider refused, or the login ran out"
+    CANCELLED = "CANCELLED", "The user dropped the login before it was finished"
 
 
 class MailAccount(models.Model):
@@ -491,6 +493,9 @@ class OAuthLink(models.Model):
     name = models.CharField(max_length=200, blank=True, default="", help_text="The display name the new mailbox gets.")
     expires_at = models.DateTimeField(help_text="A link not completed by then is refused.")
     created_at = models.DateTimeField(auto_now_add=True, help_text="When the link was started.")
+    error_code = models.CharField(max_length=30, null=True, blank=True, help_text="FAILED: the machine-readable kind of failure (a MailErrorCode).")
+    error_message = models.TextField(null=True, blank=True, help_text="FAILED: one sentence for the user.")
+    claimed_until = models.DateTimeField(null=True, blank=True, help_text="Held by a completion until then, so one request exchanges the code at a time.")
 
 
 
