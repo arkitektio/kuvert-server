@@ -104,6 +104,7 @@ contract = Contract(
     jobs={
         "ensureadmin": Job(("ensureadmin",), "Create the operator account the config names"),
         "rotate_secrets": Job(("rotate_secrets",), "Re-encrypt every stored mailbox credential with the first key of the key file"),
+        "restore_descriptors": Job(("restore_descriptors",), "Store the descriptors of every message, conversation and sent mail that misses one (--all: of every row)"),
     },
-    setup=("ensureadmin",),
+    setup=("ensureadmin", "restore_descriptors"),
 )

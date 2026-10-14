@@ -26,10 +26,20 @@ anything is recreated — and runs everything else as a job the image offers by 
 
 What this service declares:
 
-- Setup, in order: `ensureadmin`.
+- Setup, in order: `ensureadmin`, `restore_descriptors`. The second stores the descriptors of
+  every row that misses a declared key (rows from before the key existed); `--all` describes
+  every row again after a describer changed what a key means.
 - Other jobs: `rotate_secrets`.
 
 `tests/test_prepared.py` holds the contract to this: migrations committed, every job a command
 of this service, the setup run twice. In `deployments/next` the service runs
 `arkitekt-service standalone --debug`, which migrates and then serves: restart its container
 to apply a new migration.
+
+## Descriptors
+
+Every descriptor is stored (`stored_descriptors`, recomputed on every save by
+`arkitekt_service`), so a port's `requires` is the `requires` argument of the message, thread and
+outbox filters: one indexed query. A thread's `@kuvert/message_count` is recounted in place
+(`mail.threads.refresh`), which restores the thread; any other `update()` of a field a
+descriptor reads restores its rows (`service.restore`).

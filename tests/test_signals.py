@@ -71,6 +71,9 @@ def intake(settings):
     }
     yield server
     server.server.shutdown()
+    # Closed, not only stopped: a signal still queued for this intake is refused at once
+    # instead of holding the one sender thread until its timeout.
+    server.server.server_close()
 
 
 def _organization():

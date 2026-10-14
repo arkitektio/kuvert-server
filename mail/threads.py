@@ -84,6 +84,10 @@ def refresh(thread_id: int) -> None:
         models.Thread.objects.filter(id=thread_id).delete()
         return
     models.Thread.objects.filter(id=thread_id).update(message_count=stats["count"], last_message_at=stats["last"])
+    # Counted in place, so no save stores the count among its descriptors: restored here.
+    from kuvert_server.service import service  # it binds the models this module writes
+
+    service.restore(models.Thread.objects.filter(id=thread_id))
 
 
 def refresh_many(thread_ids: set[int]) -> None:

@@ -198,7 +198,7 @@ class Message(OrgScoped):
     truncated: bool
     created_at: datetime.datetime
     attachments: List[Attachment] = strawberry_django.field(description="Attached files, inline images included (`inline`).")
-    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, description=DESCRIPTORS_DESCRIPTION)
+    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, only=["stored_descriptors"], description=DESCRIPTORS_DESCRIPTION)
 
     @classmethod
     def get_queryset(cls, queryset, info, **kwargs):  # noqa: ANN001, ANN206
@@ -288,7 +288,7 @@ class Thread(OrgScoped):
     subject: str
     last_message_at: Optional[datetime.datetime]
     message_count: int
-    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, description=DESCRIPTORS_DESCRIPTION)
+    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, only=["stored_descriptors"], description=DESCRIPTORS_DESCRIPTION)
 
     @strawberry_django.field(description="The conversation's messages, oldest first.")
     def messages(self, info: Info) -> List[Message]:
@@ -356,7 +356,7 @@ class OutgoingMessage(OrgScoped):
     created_at: datetime.datetime
     sent_at: Optional[datetime.datetime]
     attachments: List[datalayer_types.BigFileStore] = strawberry_django.field(description="The files attached.")
-    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, description=DESCRIPTORS_DESCRIPTION)
+    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, only=["stored_descriptors"], description=DESCRIPTORS_DESCRIPTION)
 
     @strawberry_django.field(description="To addresses.")
     def to(self) -> List[Address]:

@@ -6,6 +6,7 @@
 
 import datetime
 import typing
+from enum import Enum
 
 import strawberry
 import strawberry_django
@@ -13,6 +14,7 @@ from django.db.models import Exists, OuterRef, Q, QuerySet
 from django.utils import timezone
 from kante.types import Info
 from strawberry import auto
+from strawberry.scalars import JSON
 
 from embeddings import search
 from embeddings.search import hybrid_search
@@ -22,6 +24,42 @@ from mail.scoping import for_org
 
 def _ids(prefix: str, field: str, value: list[strawberry.ID]) -> Q:
     return Q(**{f"{prefix}{field}__in": value})
+
+
+@strawberry.enum(description="How a descriptor constraint compares the object's value with the stated one. The operators a rekuest port's `requires` and `provides` are written in, with the same meaning.")
+class DescriptorOperator(str, Enum):
+    """The comparison of one constraint."""
+
+    EQUALS = "EQUALS"
+    MATCHES = "MATCHES"
+    NOT_EQUALS = "NOT_EQUALS"
+    GTE = "GTE"
+    LTE = "LTE"
+    EXISTS = "EXISTS"
+    CONTAINS = "CONTAINS"
+    IN = "IN"
+    NOT_IN = "NOT_IN"
+
+
+@strawberry.input(
+    description=(
+        "One constraint on an object's descriptors, in the shape a rekuest port states its `requires` in -- so a picker hands a port's constraints on unchanged. "
+        "`key` is one of the keys the structure declares (e.g. `@kuvert/has_attachments`); a key it does not declare is refused."
+    )
+)
+class DescriptorConstraintInput:
+    """One ``{key, operator, value}`` constraint."""
+
+    key: str = strawberry.field(description="The descriptor key, e.g. `@kuvert/has_attachments`")
+    operator: DescriptorOperator = strawberry.field(description="How the object's value is compared with `value`. MATCHES is equality, as EQUALS is")
+    value: JSON | None = strawberry.field(default=None, description="The value compared against: a number for GTE and LTE, a list for IN and NOT_IN, true or false for EXISTS, the member looked for with CONTAINS")
+
+
+def _requires(model: type, value: list[DescriptorConstraintInput], prefix: str) -> Q:
+    """A port's ``requires`` on the stored descriptors of ``model``'s rows: one indexed condition."""
+    from kuvert_server.service import service  # it binds the models this module filters
+
+    return service.requires(model, value, prefix)
 
 
 @strawberry_django.filter_type(models.MailAccount)
@@ -116,6 +154,11 @@ class MessageFilter:
     def account(self, value: strawberry.ID, prefix: str) -> Q:
         """Only messages of this mailbox."""
         return Q(**{f"{prefix}account_id": value})
+
+    @strawberry_django.filter_field
+    def requires(self, value: list[DescriptorConstraintInput], prefix: str) -> Q:
+        """Only messages satisfying every one of these descriptor constraints: a port's `requires`, handed on unchanged. A key messages do not declare is refused."""
+        return _requires(models.Message, value, prefix)
 
     @strawberry_django.filter_field
     def folder(self, value: strawberry.ID, prefix: str) -> Q:
@@ -217,6 +260,11 @@ class ThreadFilter:
     def account(self, value: strawberry.ID, prefix: str) -> Q:
         """Only conversations of this mailbox."""
         return Q(**{f"{prefix}account_id": value})
+
+    @strawberry_django.filter_field
+    def requires(self, value: list[DescriptorConstraintInput], prefix: str) -> Q:
+        """Only conversations satisfying every one of these descriptor constraints: a port's `requires`, handed on unchanged. A key conversations do not declare is refused."""
+        return _requires(models.Thread, value, prefix)
 
     @strawberry_django.filter_field
     def folder(self, value: strawberry.ID, prefix: str) -> Q:
@@ -341,6 +389,11 @@ class OutgoingMessageFilter:
     def status(self, value: enums.OutgoingStatus, prefix: str) -> Q:
         """Only mail in this status."""
         return Q(**{f"{prefix}status": value.value})
+
+    @strawberry_django.filter_field
+    def requires(self, value: list[DescriptorConstraintInput], prefix: str) -> Q:
+        """Only sent mail satisfying every one of these descriptor constraints: a port's `requires`, handed on unchanged. A key sent mail does not declare is refused."""
+        return _requires(models.OutgoingMessage, value, prefix)
 
 
 @strawberry_django.filter_type(models.TaskList)

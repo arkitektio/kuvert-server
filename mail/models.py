@@ -16,6 +16,7 @@ mailbox does not push (its ``push_*`` settings) stays local as a :class:`LocalPi
 (:mod:`mail.overlay`).
 """
 
+from arkitekt_service.service.described import Described
 from authentikate.models import Client, Organization, User
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
@@ -264,7 +265,7 @@ class MailFolder(models.Model):
         return self.path
 
 
-class Thread(models.Model):
+class Thread(Described):
     """A conversation: messages linked by In-Reply-To/References, across the mailbox's folders."""
 
     account = models.ForeignKey(MailAccount, on_delete=models.CASCADE, related_name="threads", help_text="The mailbox the conversation is in.")
@@ -274,10 +275,10 @@ class Thread(models.Model):
     message_ids = ArrayField(models.CharField(max_length=998), default=list, blank=True, help_text="Every Message-ID the conversation has held. A message that comes back (moved, re-read after a UIDVALIDITY change) rejoins the thread by it, so tasks keep their threads.")
 
     class Meta:
-        indexes = [models.Index(fields=["account", "-last_message_at"], name="mail_thread_recent"), GinIndex(fields=["message_ids"], name="mail_thread_mids")]
+        indexes = [models.Index(fields=["account", "-last_message_at"], name="mail_thread_recent"), GinIndex(fields=["message_ids"], name="mail_thread_mids"), GinIndex(fields=["stored_descriptors"], name="mail_thread_desc_gin", opclasses=["jsonb_path_ops"])]
 
 
-class Message(EmbeddedDescriptionMixin, models.Model):
+class Message(EmbeddedDescriptionMixin, Described):
     """One message in one folder. A copy in another folder is another row with the same ``message_id``."""
 
     account = models.ForeignKey(MailAccount, on_delete=models.CASCADE, related_name="messages", help_text="The mailbox.")
@@ -328,6 +329,7 @@ class Message(EmbeddedDescriptionMixin, models.Model):
             models.Index(fields=["account", "message_key"], name="mail_msg_account_key"),
             GinIndex(fields=["category_ids"], name="mail_msg_categories"),
             *embedding_indexes("mail_msg"),
+            GinIndex(fields=["stored_descriptors"], name="mail_msg_desc_gin", opclasses=["jsonb_path_ops"]),
         ]
 
     def embedding_source_text(self) -> str | None:
@@ -450,7 +452,7 @@ class Attachment(models.Model):
         constraints = [models.UniqueConstraint(fields=["message", "position"], name="mail_att_message_position")]
 
 
-class OutgoingMessage(models.Model):
+class OutgoingMessage(Described):
     """A message sent through a mailbox's SMTP server: what was asked, and what happened."""
 
     account = models.ForeignKey(MailAccount, on_delete=models.CASCADE, related_name="outgoing", help_text="The mailbox it is sent from.")
@@ -475,6 +477,7 @@ class OutgoingMessage(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [GinIndex(fields=["stored_descriptors"], name="mail_out_desc_gin", opclasses=["jsonb_path_ops"])]
 
 
 class OAuthLink(models.Model):
