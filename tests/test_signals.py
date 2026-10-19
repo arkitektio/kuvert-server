@@ -67,7 +67,7 @@ def intake(settings):
     settings.REKUEST_SERVICE = {"REKUEST_URL": server.url, "SERVICE": "kuvert"}
     settings.INSTANCE = {
         "PRIVATE_KEY": KEY.as_pem(private=True).decode(),
-        "TRUST_JWKS": {"keys": [{**trust.public_jwk(KEY), "service": "live.arkitekt.kuvert"}]},
+        "TRUST_JWKS": {"keys": [{**trust.public_jwk(KEY), "service": "kuvert"}]},
     }
     yield server
     server.server.shutdown()
@@ -114,7 +114,7 @@ def test_team_mailbox_threads_are_signalled(intake):
     thread = _thread("ORGANIZATION")
     (received,) = intake.of("@kuvert/thread")
     assert (received["json"]["kind"], received["json"]["object"]) == ("CREATED", str(thread.pk))
-    assert trust.verify("POST", received["path"], received["body"], received["headers"]["Authorization"], audience="live.arkitekt.rekuest").issuer == "live.arkitekt.kuvert"
+    assert trust.verify("POST", received["path"], received["body"], received["headers"]["Authorization"], audience="rekuest").issuer == "kuvert"
 
 
 @pytest.mark.django_db(transaction=True)

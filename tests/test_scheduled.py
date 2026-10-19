@@ -22,7 +22,7 @@ def test_actions_are_offered_and_wired_to_nothing(settings):
     assert {"sync_all_mailboxes", "flush_mail_changes", "reembed_stale", "purge_orphaned_stores"} <= set(actions)
     # An organization schedules them for itself, so each is handed the organization it runs for.
     assert all(action.takes_organization for action in actions.values())
-    assert all(set(action) == {"interface", "name", "description"} for action in agent.manifest()["actions"])
+    assert all(set(action) == {"interface", "name", "description", "args"} for action in agent.manifest()["actions"])
 
 
 def test_the_service_and_the_agent_are_separate_declarations():
