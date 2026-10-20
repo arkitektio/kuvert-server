@@ -15,7 +15,8 @@ agent's to say (``kuvert_server.hook_agent``), a different thing with its own co
 Mail is personal by default. A signal reaches every member of the organization who can set a
 trigger, so only mailboxes shared with the whole organization (``visibility = ORGANIZATION``,
 a team mailbox) are announced; private and shared-with-some mail never is. Tasks and mail
-accounts are personal too and get no signals.
+accounts are personal too and get no signals. Providers are the organization's own settings (no
+credentials are described), so every change to one is announced.
 """
 
 from mail import models
@@ -28,6 +29,15 @@ service = Service("kuvert", hosts=contract.description.hosts, description="Mail:
 
 # --- Structures: what kuvert hosts ----------------------------------------------------
 
+mailprovider = service.structure(
+    models.MailProvider,
+    "@kuvert/mailprovider",
+    describe=lambda provider: {
+        "@kuvert/provider_kind": str(provider.kind),
+        "@kuvert/enabled": provider.enabled,
+        "@kuvert/capabilities": sorted(str(capability) for capability in provider.capabilities or []),
+    },
+)
 message = service.structure(models.Message, "@kuvert/message", describe=lambda message: {"@kuvert/has_attachments": bool(message.has_attachments)})
 thread = service.structure(models.Thread, "@kuvert/thread", describe=lambda thread: {"@kuvert/message_count": thread.message_count})
 outgoingmessage = service.structure(
@@ -40,6 +50,8 @@ outgoingmessage = service.structure(
 # --- Signals: what kuvert announces ----------------------------------------------------
 
 on_account = organization_of("account.organization")
+
+service.model_signal(mailprovider, organization=organization_of())
 
 
 def _team_mailbox(obj, kind: str) -> bool:

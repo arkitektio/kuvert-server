@@ -16,6 +16,11 @@ from arkitekt_service import trust
 from kuvert_server.service import service
 
 EXPECTED = {
+    "@kuvert/mailprovider": [
+        "CREATED",
+        "UPDATED",
+        "DELETED"
+    ],
     "@kuvert/message": [
         "CREATED"
     ],
@@ -88,12 +93,13 @@ def test_the_manifest_declares_every_model_signal():
 
 def test_the_manifest_lists_what_kuvert_hosts_with_its_descriptors():
     hosted = {s["identifier"]: s for s in service.manifest()["structures"]}
-    # Everything hosted is signalled (for team mailboxes only); nothing else is declared.
+    # Everything hosted is signalled (mail for team mailboxes only); nothing else is declared.
     assert set(hosted) == set(EXPECTED)
     assert hosted["@kuvert/outgoingmessage"]["label"] == "Outgoing Message"
     assert hosted["@kuvert/message"]["descriptors"] == [{"key": "@kuvert/has_attachments", "type": "BOOL", "description": "Whether it has attachments, not counting inline images"}]
     assert [(d["key"], d["type"]) for d in hosted["@kuvert/thread"]["descriptors"]] == [("@kuvert/message_count", "INT")]
     assert [(d["key"], d["type"]) for d in hosted["@kuvert/outgoingmessage"]["descriptors"]] == [("@kuvert/status", "STRING")]
+    assert [(d["key"], d["type"]) for d in hosted["@kuvert/mailprovider"]["descriptors"]] == [("@kuvert/provider_kind", "STRING"), ("@kuvert/enabled", "BOOL"), ("@kuvert/capabilities", "LIST")]
     # The signal of a structure carries exactly the keys the structure declares.
     for signal in service.manifest()["signals"]:
         assert signal["descriptors"] == [d["key"] for d in hosted[signal["identifier"]]["descriptors"]]
@@ -115,6 +121,19 @@ def test_team_mailbox_threads_are_signalled(intake):
     (received,) = intake.of("@kuvert/thread")
     assert (received["json"]["kind"], received["json"]["object"]) == ("CREATED", str(thread.pk))
     assert trust.verify("POST", received["path"], received["body"], received["headers"]["Authorization"], audience="rekuest").issuer == "kuvert"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_provider_change_is_signalled_without_its_credentials(intake):
+    from tests.conftest import make_provider
+
+    provider = make_provider(_organization(), "GMAIL", name="Gmail")
+    provider.enabled = False
+    provider.save()
+    created, updated = intake.of("@kuvert/mailprovider", count=2)
+    assert [created["json"]["kind"], updated["json"]["kind"]] == ["CREATED", "UPDATED"]
+    assert updated["json"]["descriptors"] == {"@kuvert/provider_kind": "GMAIL", "@kuvert/enabled": False, "@kuvert/capabilities": ["SCHEDULED_SYNC", "SEND"]}
+    assert "kuvert-test-secret" not in updated["body"].decode() and "secret" not in updated["json"]
 
 
 @pytest.mark.django_db(transaction=True)

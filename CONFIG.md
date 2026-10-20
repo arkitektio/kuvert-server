@@ -183,20 +183,19 @@ The authentikate library's own schema: `issuers` (the lok JWKS/RSA keys tokens a
 | `max_send_bytes` | `MAIL__MAX_SEND_BYTES` | ByteSize | `26214400` | Largest message `sendMessage` builds, attachments included. |
 | `user_agent` | `MAIL__USER_AGENT` | str | `"kuvert"` | The X-Mailer header of sent mail, and the IMAP ID the service announces. |
 
-### `oauth` (optional; defaults apply) — OAuth clients per provider. A provider without one answers NOT_CONFIGURED; mailboxes with an app password still work.
+### `oauth` (optional; defaults apply) — The OAuth endpoints per kind of provider. Every value has the provider's public default, so the block is only needed to override one.
+
+The Gmail and Microsoft OAuth *clients* are not configured here: an organization's admins set them up as providers (`createOAuthProvider`), like every other provider (`createServerProvider`).
 
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
 | `link_expires_seconds` | `OAUTH__LINK_EXPIRES_SECONDS` | int | `900` | How long a started OAuth link may be completed. |
 
-### `oauth.google` — One OAuth 2.0 client (authorization code flow with PKCE) for XOAUTH2 mailbox access.
+### `oauth.google` — Where the service talks to for one kind of OAuth provider. The clients themselves (id, secret, redirect URLs) are the organizations' providers, set up by their admins; only these addresses stay with the deployment, since the service itself posts to them.
 
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
-| `client_id` | `OAUTH__GOOGLE__CLIENT_ID` | str | *required* | The OAuth client id. |
-| `client_secret` 🔒 | `OAUTH__GOOGLE__CLIENT_SECRET` | Optional[str] | `None` | The OAuth client secret (a public client with PKCE has none). Secret. |
-| `redirect_urls` | `OAUTH__GOOGLE__REDIRECT_URLS` | List[str] | *required* | Redirect URLs registered for the client. A client may pick one per link; the first is the default. Anything else is refused. |
-| `authorize_url` | `OAUTH__GOOGLE__AUTHORIZE_URL` | Optional[str] | `None` | Override the provider's authorization endpoint (tests, sovereign clouds). |
+| `authorize_url` | `OAUTH__GOOGLE__AUTHORIZE_URL` | Optional[str] | `None` | Override the provider's authorization endpoint (tests, sovereign clouds). Microsoft's default carries the provider's tenant. |
 | `token_url` | `OAUTH__GOOGLE__TOKEN_URL` | Optional[str] | `None` | Override the provider's token endpoint. |
 | `userinfo_url` | `OAUTH__GOOGLE__USERINFO_URL` | Optional[str] | `None` | Override the endpoint the mailbox address is read from. |
 | `scopes` | `OAUTH__GOOGLE__SCOPES` | Optional[List[str]] | `None` | Override the scopes asked for. The defaults give IMAP, POP3 and SMTP access plus a refresh token. |
@@ -206,14 +205,11 @@ The authentikate library's own schema: `issuers` (the lok JWKS/RSA keys tokens a
 | `smtp_port` | `OAUTH__GOOGLE__SMTP_PORT` | Optional[int] | `None` | Override the SMTP port. |
 | `timeout_seconds` | `OAUTH__GOOGLE__TIMEOUT_SECONDS` | float | `20` | Timeout for one token request. |
 
-### `oauth.microsoft` — One OAuth 2.0 client (authorization code flow with PKCE) for XOAUTH2 mailbox access.
+### `oauth.microsoft` — Where the service talks to for one kind of OAuth provider. The clients themselves (id, secret, redirect URLs) are the organizations' providers, set up by their admins; only these addresses stay with the deployment, since the service itself posts to them.
 
 | Key | Env var | Type | Default | Description |
 |---|---|---|---|---|
-| `client_id` | `OAUTH__MICROSOFT__CLIENT_ID` | str | *required* | The OAuth client id. |
-| `client_secret` 🔒 | `OAUTH__MICROSOFT__CLIENT_SECRET` | Optional[str] | `None` | The OAuth client secret (a public client with PKCE has none). Secret. |
-| `redirect_urls` | `OAUTH__MICROSOFT__REDIRECT_URLS` | List[str] | *required* | Redirect URLs registered for the client. A client may pick one per link; the first is the default. Anything else is refused. |
-| `authorize_url` | `OAUTH__MICROSOFT__AUTHORIZE_URL` | Optional[str] | `None` | Override the provider's authorization endpoint (tests, sovereign clouds). |
+| `authorize_url` | `OAUTH__MICROSOFT__AUTHORIZE_URL` | Optional[str] | `None` | Override the provider's authorization endpoint (tests, sovereign clouds). Microsoft's default carries the provider's tenant. |
 | `token_url` | `OAUTH__MICROSOFT__TOKEN_URL` | Optional[str] | `None` | Override the provider's token endpoint. |
 | `userinfo_url` | `OAUTH__MICROSOFT__USERINFO_URL` | Optional[str] | `None` | Override the endpoint the mailbox address is read from. |
 | `scopes` | `OAUTH__MICROSOFT__SCOPES` | Optional[List[str]] | `None` | Override the scopes asked for. The defaults give IMAP, POP3 and SMTP access plus a refresh token. |

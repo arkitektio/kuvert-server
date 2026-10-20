@@ -1,4 +1,4 @@
-"""Re-encrypt every stored mailbox credential with the first key of ``secrets.key_path``.
+"""Re-encrypt every stored credential (of mailboxes, logins and providers) with the first key of ``secrets.key_path``.
 
 Put a new key on the first line of the key file, restart, run this, then drop the old key:
 
@@ -13,11 +13,12 @@ from mail import crypto, models
 FIELDS = {
     models.MailAccount: ("secret", "access_token", "smtp_secret"),
     models.OAuthLink: ("code_verifier",),
+    models.MailProvider: ("secret",),
 }
 
 
 class Command(BaseCommand):
-    help = "Re-encrypt stored mailbox credentials with the newest key."
+    help = "Re-encrypt stored mailbox and provider credentials with the newest key."
 
     def handle(self, *args, **options) -> None:  # noqa: ANN002, ANN003
         rotated = 0

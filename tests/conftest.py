@@ -10,7 +10,8 @@ service is mocked: a test seeds mail over SMTP and reads it back through the Gra
 * ``authenticated_context`` / ``colleague_context`` / ``other_org_context`` — two members of one
   organization and one of another, for visibility and tenancy tests.
 * ``mailbox`` — a GreenMail user linked as a mailbox (IMAP or POP3) through ``createMailAccount``.
-* ``oauth`` / ``fakeoauth`` — both OAuth providers pointed at ``fakeoauth``.
+* ``fakeoauth`` — both kinds' OAuth endpoints pointed at ``fakeoauth``, with a Gmail and a Microsoft provider using its client.
+* ``make_provider`` / ``provider_for`` — provider rows as an admin sets them up; ``admin_context`` is one.
 * ``datalayer`` — switches the datalayer on against the stack's RustFS.
 """
 
@@ -266,11 +267,11 @@ def greenmail(backend_stack) -> GreenMail:
     return GreenMail(backend_stack)
 
 
-def _context(token: str, sub: str, org_slug: str) -> HttpContext:
+def _context(token: str, sub: str, org_slug: str, roles: list[str] | None = None) -> HttpContext:
     user, _ = User.objects.get_or_create(sub=sub, iss="static_issuer", defaults={"username": f"static_issuer_{sub}"})
     client, _ = Client.objects.get_or_create(client_id="oinsoins")
     org, _ = Organization.objects.get_or_create(slug=org_slug)
-    membership, _ = Membership.objects.get_or_create(user=user, organization=org)
+    membership, _ = Membership.objects.update_or_create(user=user, organization=org, defaults={"roles": roles or ["editor"]})
     request = UniversalRequest(_extensions={"token": token}, _client=client, _user=user, _organization=org)  # type: ignore[arg-type]
     request.set_membership(membership)  # type: ignore[arg-type]
     return HttpContext(request=request, response=TemporalResponse(), headers={"Authorization": f"Bearer {token}", "User-Agent": "kuvert-tests"}, type="http")
@@ -280,6 +281,12 @@ def _context(token: str, sub: str, org_slug: str) -> HttpContext:
 def authenticated_context(transactional_db) -> HttpContext:
     """Member A of ``static_org`` (the static ``test`` token)."""
     return _context("test", "1", "static_org")
+
+
+@pytest.fixture
+def admin_context(transactional_db) -> HttpContext:
+    """An admin of ``static_org``: the only role that may set providers up."""
+    return _context("admin", "3", "static_org", roles=["admin"])
 
 
 @pytest.fixture
@@ -307,6 +314,41 @@ def aexecute(authenticated_context):
     return _run
 
 
+def make_provider(organization: Organization, kind: str = "GENERIC", **fields) -> "models.MailProvider":  # noqa: ANN003, F821
+    """A provider row as an admin's mutation would leave it (``tests/test_providers.py`` covers the mutations themselves).
+
+    GENERIC is open to any server unless ``settings`` fixes them; GMAIL and MICROSOFT are the
+    test client fakeoauth knows.
+    """
+    from mail import crypto, models, providers
+
+    values: dict = {"name": fields.pop("name", f"{providers.kind_of(kind).label} {uuid.uuid4().hex[:6]}"), "capabilities": sorted(c.value for c in providers.kind_of(kind).capabilities)}
+    if kind == "GENERIC":
+        values["settings"] = {"protocol": None, "incoming": None, "smtp": None, "save_sent_copy": True}
+    else:
+        values["settings"] = {"client_id": OAUTH_CLIENT["client_id"], "redirect_urls": [REDIRECT, "https://other.test/callback"], "tenant": "common"}
+        values["secret"] = crypto.encrypt(OAUTH_CLIENT["client_secret"])
+    return models.MailProvider.objects.create(organization=organization, kind=kind, **{**values, **fields})
+
+
+@pytest.fixture
+def provider_for(authenticated_context):
+    """The id of the first provider of a kind in member A's (or ``context``'s) organization, set up on first use."""
+    from channels.db import database_sync_to_async
+
+    from mail import models
+
+    def _get(kind: str, context: HttpContext | None) -> str:
+        organization = (context or authenticated_context).request.organization
+        row = models.MailProvider.objects.filter(organization=organization, kind=kind).order_by("id").first()
+        return str((row or make_provider(organization, kind)).id)
+
+    async def _provider(kind: str = "GENERIC", context: HttpContext | None = None) -> str:
+        return await database_sync_to_async(_get)(kind, context)
+
+    return _provider
+
+
 CREATE = """
 mutation Create($input: CreateMailAccountInput!) {
   createMailAccount(input: $input) { id emailAddress status protocol capabilities isOwner canSend }
@@ -318,13 +360,14 @@ mutation Sync($id: ID!) { syncMailAccount(id: $id) { created updated deleted fol
 
 
 @pytest.fixture
-def mailbox(aexecute, greenmail, backend_stack):
-    """Link a fresh GreenMail user as a mailbox (as member A, or ``context``); returns ``{id, address, …}``."""
+def mailbox(aexecute, greenmail, backend_stack, provider_for):
+    """Link a fresh GreenMail user as a mailbox (as member A, or ``context``) through the organization's open IMAP provider; returns ``{id, address, …}``."""
 
     async def _link(protocol: str = "IMAP", context: HttpContext | None = None, address: str | None = None, **extra) -> dict:  # noqa: ANN003
         address = address or greenmail.user()
         port = backend_stack.pop3s_port if protocol == "POP3" else backend_stack.imaps_port
         payload = {
+            "provider": await provider_for("GENERIC", context),
             "emailAddress": address,
             "password": PASSWORD,
             "protocol": protocol,
@@ -361,12 +404,12 @@ def dovecot(backend_stack) -> Dovecot:
 
 
 @pytest.fixture
-def dovecot_mailbox(aexecute, dovecot):
+def dovecot_mailbox(aexecute, dovecot, provider_for):
     """A fresh Dovecot user (CONDSTORE) linked as an IMAP mailbox, receive-only; returns ``{id, user, …}``."""
 
     async def _link() -> dict:
         user = dovecot.user()
-        payload = {"emailAddress": f"{user}@dovecot.test", "username": user, "password": Dovecot.PASSWORD, "protocol": "IMAP", "incoming": {"host": "localhost", "port": dovecot.stack.dovecot_port, "security": "TLS"}}
+        payload = {"provider": await provider_for("GENERIC"), "emailAddress": f"{user}@dovecot.test", "username": user, "password": Dovecot.PASSWORD, "protocol": "IMAP", "incoming": {"host": "localhost", "port": dovecot.stack.dovecot_port, "security": "TLS"}}
         created = (await aexecute(CREATE, {"input": payload})).data["createMailAccount"]
         return {**created, "user": user}
 
@@ -390,10 +433,12 @@ REDIRECT = "https://kuvert.test/callback"
 
 
 class FakeOAuth:
-    """Drives fakeoauth's /_admin endpoints."""
+    """Drives fakeoauth's /_admin endpoints; ``gmail`` and ``microsoft`` are member A's providers using its client."""
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, gmail: str, microsoft: str) -> None:
         self.url = url
+        self.gmail = gmail
+        self.microsoft = microsoft
 
     def approve(self, auth_url: str, email: str, access_token: str | None = None, name: str = "") -> str:
         """The user approves at the provider; returns the code the redirect would carry."""
@@ -425,12 +470,10 @@ class FakeOAuth:
 
 
 @pytest.fixture
-def fakeoauth(backend_stack, settings) -> FakeOAuth:
-    """Both OAuth providers pointed at fakeoauth; Google's mail servers are the stack's GreenMail."""
+def fakeoauth(backend_stack, settings, authenticated_context) -> FakeOAuth:
+    """Both kinds' OAuth endpoints pointed at fakeoauth, and a Gmail and a Microsoft provider of member A's organization using its client; the mail servers are the stack's GreenMail."""
     _post(backend_stack.fakeoauth_url + "/_admin/clients", OAUTH_CLIENT)
-    provider = {
-        **OAUTH_CLIENT,
-        "redirect_urls": [REDIRECT, "https://other.test/callback"],
+    endpoints = {
         "authorize_url": "https://accounts.example/authorize",
         "token_url": backend_stack.fakeoauth_url + "/token",
         "imap_host": "localhost",
@@ -439,8 +482,9 @@ def fakeoauth(backend_stack, settings) -> FakeOAuth:
         "smtp_port": backend_stack.smtps_port,
         "timeout_seconds": 10,
     }
-    settings.KUVERT_OAUTH = {"google": provider, "microsoft": {**provider}, "link_expires_seconds": 900}
-    fake = FakeOAuth(backend_stack.fakeoauth_url)
+    settings.KUVERT_OAUTH = {"google": endpoints, "microsoft": {**endpoints}, "link_expires_seconds": 900}
+    organization = authenticated_context.request.organization
+    fake = FakeOAuth(backend_stack.fakeoauth_url, gmail=str(make_provider(organization, "GMAIL", name="Gmail").id), microsoft=str(make_provider(organization, "MICROSOFT", name="Microsoft").id))
     fake.config(expires_in=3600, rotate_refresh=False)
     yield fake
     fake.release()  # never leave token requests parked for the next test

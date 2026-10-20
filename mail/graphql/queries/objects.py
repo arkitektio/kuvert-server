@@ -1,4 +1,4 @@
-"""Single objects by id, counts, presets and OAuth providers."""
+"""Single objects by id, counts, presets and the kinds of provider."""
 
 from typing import Optional
 
@@ -8,10 +8,9 @@ from kante.types import Info
 
 from mail import enums, filters, models, presets, types
 from mail.graphql.utils import get_or_404
-from mail.oauth.providers import configured_providers
 from mail.scoping import for_org
 
-__all__ = ["mail_account", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "oauth_providers", "threads_count", "messages_count", "task", "task_list", "tasks_count", "category"]
+__all__ = ["mail_account", "mail_provider", "provider_kinds", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "threads_count", "messages_count", "task", "task_list", "tasks_count", "category"]
 
 
 def threads_count(info: Info, filters: Optional[filters.ThreadFilter] = None) -> int:
@@ -32,6 +31,15 @@ def messages_count(info: Info, filters: Optional[filters.MessageFilter] = None) 
 
 def mail_account(info: Info, id: strawberry.ID) -> types.MailAccount:
     return get_or_404(models.MailAccount, info, id)  # type: ignore[return-value]
+
+
+def mail_provider(info: Info, id: strawberry.ID) -> types.MailProvider:
+    return get_or_404(models.MailProvider, info, id)  # type: ignore[return-value]
+
+
+def provider_kinds(info: Info) -> list[types.ProviderKind]:
+    """The kinds of provider this server can run, each with what it can do."""
+    return [types.provider_kind(kind) for kind in models.Provider.values]
 
 
 def mail_folder(info: Info, id: strawberry.ID) -> types.MailFolder:
@@ -60,7 +68,7 @@ def _server(value: tuple[str, int, str] | None) -> Optional[types.ServerSettings
 
 def mail_presets(info: Info, address: Optional[str] = strawberry.UNSET) -> list[types.MailPreset]:
     """Known providers' server settings; only the one matching ``address`` when it is given."""
-    configured = set(configured_providers())
+    configured = set(for_org(models.MailProvider, info).filter(enabled=True).values_list("kind", flat=True))
     chosen = presets.PRESETS
     if address:
         match = presets.for_address(address)
@@ -81,11 +89,6 @@ def mail_presets(info: Info, address: Optional[str] = strawberry.UNSET) -> list[
         )
         for p in chosen
     ]
-
-
-def oauth_providers(info: Info) -> list[enums.Provider]:
-    """Providers this deployment can link through OAuth."""
-    return [enums.Provider(p) for p in configured_providers()]
 
 
 def task(info: Info, id: strawberry.ID) -> types.Task:

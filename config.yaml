@@ -38,17 +38,10 @@ secrets:
 #   scheduled_every_seconds: 300
 # mail:
 #   allowed_private_hosts: []   # e.g. a mail server on the same network
-# oauth:                 # link Gmail / Microsoft mailboxes; see CONFIG.md
-#   google:
-#     client_id: <id>.apps.googleusercontent.com
-#     client_secret: <secret>
-#     redirect_urls:
-#     - https://example.org/kuvert/callback
-#   microsoft:
-#     client_id: <application id>
-#     client_secret: <secret>
-#     redirect_urls:
-#     - https://example.org/kuvert/callback
+# Mailboxes are linked through providers an organization's admins set up in the client
+# (an IMAP server, a Gmail or Microsoft OAuth client); nothing about them is configured here.
+# oauth:                 # only to override the OAuth endpoints; see CONFIG.md
+#   link_expires_seconds: 900
 # datalayer:             # S3 for raw messages and attachments; see CONFIG.md
 #   role_arn: arn:aws:iam::000000000000:role/datalayer
 #   access_key: <rustfs user>

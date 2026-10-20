@@ -1,4 +1,4 @@
-"""Linking mailboxes with a password, changing, testing, sharing, syncing and removing them."""
+"""Linking mailboxes with a password (through an IMAP provider), changing, testing, sharing, syncing and removing them."""
 
 from typing import Optional
 
@@ -9,7 +9,7 @@ from django.db import transaction
 from kante.errors import ValidationError
 from kante.types import Info
 
-from mail import changes, crypto, enums, models, presets, storage, types
+from mail import changes, crypto, enums, models, presets, providers, storage, types
 from mail.accounts import incoming_credentials, incoming_endpoint, smtp_credentials, smtp_endpoint
 from mail.graphql.errors import translated
 from mail.graphql.utils import aget_or_404, get_many, get_or_404, require_owner
@@ -19,6 +19,7 @@ from mail.sync import in_worker, sync_account
 
 __all__ = [
     "ServerInput",
+    "check_server",
     "CreateMailAccountInput",
     "UpdateMailAccountInput",
     "ShareMailAccountInput",
@@ -40,24 +41,25 @@ class ServerInput:
     security: enums.Security = enums.Security.TLS
 
 
-@strawberry.input(description="A mailbox to link with a username and (app) password. Servers default to the preset of the address's provider when there is one (`mailPresets`).")
+@strawberry.input(description="A mailbox to link with a username and (app) password, through one of the organization's IMAP providers. A provider with fixed servers takes only the login; otherwise servers default to the preset of the address's provider when there is one (`mailPresets`).")
 class CreateMailAccountInput:
+    provider: strawberry.ID = strawberry.field(description="The IMAP provider to link through (see `mailProviders`).")
     email_address: str
     password: str = strawberry.field(description="The (app) password. Stored encrypted, never returned.")
     name: Optional[str] = strawberry.field(default=None, description="A display name for the mailbox; the address by default.")
     display_name: Optional[str] = strawberry.field(default=None, description="The sender name of sent mail.")
-    protocol: enums.Protocol = enums.Protocol.IMAP
-    incoming: Optional[ServerInput] = strawberry.field(default=None, description="The IMAP or POP3 server; the preset's by default.")
-    smtp: Optional[ServerInput] = strawberry.field(default=None, description="The SMTP server; the preset's by default. Without one the mailbox cannot send.")
+    protocol: Optional[enums.Protocol] = strawberry.field(default=None, description="How incoming mail is read: the provider's when it fixes the servers, else IMAP by default.")
+    incoming: Optional[ServerInput] = strawberry.field(default=None, description="The IMAP or POP3 server; the preset's by default. Not with a provider that fixes the servers.")
+    smtp: Optional[ServerInput] = strawberry.field(default=None, description="The SMTP server; the preset's by default. Without one the mailbox cannot send. Not with a provider that fixes the servers.")
     username: Optional[str] = strawberry.field(default=None, description="The login; the address by default.")
     smtp_username: Optional[str] = strawberry.field(default=None, description="A separate SMTP login, if the server wants one.")
     smtp_password: Optional[str] = strawberry.field(default=None, description="The separate SMTP password.")
-    save_sent_copy: Optional[bool] = strawberry.field(default=None, description="Append sent mail to the Sent folder; the preset's choice by default (off for Gmail/Microsoft).")
+    save_sent_copy: Optional[bool] = strawberry.field(default=None, description="Append sent mail to the Sent folder; the provider's choice with fixed servers, else the preset's (off for Gmail/Microsoft).")
     pop_leave_on_server: bool = strawberry.field(default=True, description="POP3: keep downloaded mail on the server.")
     visibility: enums.Visibility = enums.Visibility.PRIVATE
 
 
-@strawberry.input(description="Changes to a mailbox; omitted fields stay as they are. Changing servers or credentials tests the login first.")
+@strawberry.input(description="Changes to a mailbox; omitted fields stay as they are. Changing servers or credentials tests the login first. A mailbox whose provider fixes the servers keeps them (an admin changes them on the provider).")
 class UpdateMailAccountInput:
     id: strawberry.ID
     name: Optional[str] = strawberry.UNSET
@@ -94,10 +96,12 @@ class UpdateMailFolderInput:
     sync_enabled: bool = strawberry.field(description="Whether syncs read the folder. Turning it off keeps what is stored.")
 
 
-def _check_server(value: ServerInput) -> None:
+def check_server(value: ServerInput) -> None:
+    """Refuse a server that is malformed, plain without the deployment allowing it, or not a public host (blocking: DNS)."""
     if not value.host.strip() or not 0 < value.port < 65536:
         raise ValidationError("A server needs a host and a port between 1 and 65535.")
     net.require_security(value.security.value)
+    net.check_host(value.host.strip(), value.port)
 
 
 def _test_login(account: models.MailAccount) -> list[str]:
@@ -124,35 +128,60 @@ def _test_login(account: models.MailAccount) -> list[str]:
     return capabilities
 
 
+def _server_input(value: object) -> ServerInput | None:
+    """A provider's fixed server (``mail.providers.Server``) as the input a member would give."""
+    if not isinstance(value, providers.Server):
+        return None
+    return ServerInput(host=value.host, port=value.port, security=enums.Security(value.security.value))
+
+
 @translated
 async def create_mail_account(info: Info, input: CreateMailAccountInput) -> types.MailAccount:
-    """Link a mailbox with a password: the login is tested before anything is stored."""
+    """Link a mailbox with a password through an IMAP provider: the login is tested before anything is stored."""
     request = info.context.request
     address = input.email_address.strip()
     if "@" not in address:
         raise ValidationError("emailAddress is not an email address.")
+    provider = providers.usable(await aget_or_404(models.MailProvider, info, input.provider), "This link")
+    if providers.kind_of(provider.kind).auth_method != models.AuthMethod.PASSWORD:
+        raise ValidationError(f"The provider {provider.name!r} links mailboxes through OAuth: use `startOAuthLink`.")
+    server = providers.server_settings(provider)
     preset = presets.for_address(address)
-    incoming = input.incoming
-    if incoming is None and preset is not None:
-        server = preset.pop3 if input.protocol == enums.Protocol.POP3 else preset.imap
-        incoming = ServerInput(host=server[0], port=server[1], security=enums.Security(server[2])) if server else None
-    if incoming is None:
-        raise ValidationError("No known server for this address: give `incoming`.")
-    smtp = input.smtp
-    if smtp is None and preset is not None and preset.smtp:
-        smtp = ServerInput(host=preset.smtp[0], port=preset.smtp[1], security=enums.Security(preset.smtp[2]))
-    _check_server(incoming)
-    if smtp is not None:
-        _check_server(smtp)
+    if server.fixed:
+        assert server.protocol is not None
+        if input.incoming is not None or input.smtp is not None:
+            raise ValidationError(f"The provider {provider.name!r} fixes the servers: give only the login.")
+        if input.protocol is not None and input.protocol.value != server.protocol.value:
+            raise ValidationError(f"The provider {provider.name!r} reads mail with {server.protocol.value}.")
+        protocol = enums.Protocol(server.protocol.value)
+        incoming, smtp = _server_input(server.incoming), _server_input(server.smtp)
+        save_sent_copy = server.save_sent_copy
+    else:
+        protocol = input.protocol or enums.Protocol.IMAP
+        incoming = input.incoming
+        if incoming is None and preset is not None:
+            known = preset.pop3 if protocol == enums.Protocol.POP3 else preset.imap
+            incoming = ServerInput(host=known[0], port=known[1], security=enums.Security(known[2])) if known else None
+        if incoming is None:
+            raise ValidationError("No known server for this address: give `incoming`.")
+        smtp = input.smtp
+        if smtp is None and preset is not None and preset.smtp:
+            smtp = ServerInput(host=preset.smtp[0], port=preset.smtp[1], security=enums.Security(preset.smtp[2]))
+        await in_worker(check_server, incoming)
+        if smtp is not None:
+            await in_worker(check_server, smtp)
+        save_sent_copy = preset.save_sent_copy if preset else server.save_sent_copy
+    assert incoming is not None
 
     account = models.MailAccount(
         organization=request.organization,
         creator=request.user,
+        mail_provider=provider,
         name=(input.name or address)[:200],
         email_address=address,
         display_name=(input.display_name or "")[:200],
         provider=preset.provider if preset else models.Provider.GENERIC,
-        protocol=input.protocol.value,
+        protocol=protocol.value,
         incoming_host=incoming.host.strip(),
         incoming_port=incoming.port,
         incoming_security=incoming.security.value,
@@ -164,7 +193,7 @@ async def create_mail_account(info: Info, input: CreateMailAccountInput) -> type
         secret=crypto.encrypt(input.password),
         smtp_username=input.smtp_username or None,
         smtp_secret=crypto.encrypt_optional(input.smtp_password),
-        save_sent_copy=input.save_sent_copy if input.save_sent_copy is not None else (preset.save_sent_copy if preset else True),
+        save_sent_copy=input.save_sent_copy if input.save_sent_copy is not None else save_sent_copy,
         pop_leave_on_server=input.pop_leave_on_server,
         visibility=input.visibility.value,
     )
@@ -175,11 +204,18 @@ async def create_mail_account(info: Info, input: CreateMailAccountInput) -> type
     return account  # type: ignore[return-value]
 
 
+def _fixed_servers(account: models.MailAccount) -> bool:
+    provider = account.mail_provider
+    return provider is not None and provider.kind == models.Provider.GENERIC and providers.server_settings(provider).fixed
+
+
 @translated
 async def update_mail_account(info: Info, input: UpdateMailAccountInput) -> types.MailAccount:
     """Change a mailbox (owner only). New servers or credentials are tested before they are stored."""
-    account = await aget_or_404(models.MailAccount, info, input.id)
+    account = await models.MailAccount.objects.select_related("mail_provider").aget(pk=(await aget_or_404(models.MailAccount, info, input.id)).pk)
     require_owner(account, info)
+    if (input.incoming is not strawberry.UNSET or input.smtp is not strawberry.UNSET) and _fixed_servers(account):
+        raise ValidationError("This mailbox's provider fixes its servers: an admin changes them on the provider.")
     retest = False
     before = {toggle: getattr(account, toggle) for toggle in PUSH_TOGGLES}
     for toggle in PUSH_TOGGLES:
@@ -197,14 +233,14 @@ async def update_mail_account(info: Info, input: UpdateMailAccountInput) -> type
     if input.username is not strawberry.UNSET and input.username:
         account.username, retest = input.username.strip(), True
     if input.incoming is not strawberry.UNSET and input.incoming is not None:
-        _check_server(input.incoming)
+        await in_worker(check_server, input.incoming)
         account.incoming_host, account.incoming_port, account.incoming_security = input.incoming.host.strip(), input.incoming.port, input.incoming.security.value
         retest = True
     if input.smtp is not strawberry.UNSET:
         if input.smtp is None:
             account.smtp_host = account.smtp_port = None
         else:
-            _check_server(input.smtp)
+            await in_worker(check_server, input.smtp)
             account.smtp_host, account.smtp_port, account.smtp_security = input.smtp.host.strip(), input.smtp.port, input.smtp.security.value
             retest = True
     if input.smtp_username is not strawberry.UNSET:

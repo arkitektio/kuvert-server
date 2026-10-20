@@ -4,7 +4,8 @@ Every field requires an authenticated caller (``AuthExtension``). Every read see
 caller's active organization and, within it, only the mailboxes the caller may see (their own,
 ones shared with them, and organization-wide ones) -- ``OrgScoped`` types and the
 ``mail.scoping`` lookups. Only the member who linked a mailbox changes its credentials or
-sharing, or unlinks it.
+sharing, or unlinks it. Any member may link a mailbox; only the organization's admins set up the
+providers mailboxes are linked through (``admin_mutation``).
 
 * ``AuthentikateExtension`` — authenticates the request from its bearer token
   and exposes the user/organization/client on ``info.context.request``.
@@ -27,7 +28,7 @@ from datalayer import scalars as datalayer_scalars
 from datalayer import types as datalayer_types
 from datalayer.datalayer import DatalayerConfig
 from kuvert_server.logs import QuietErrorsSchema
-from mail import enums, types
+from mail import types
 from mail.graphql import mutations, queries, subscriptions
 
 
@@ -47,6 +48,11 @@ def upload_mutation(**kwargs):  # noqa: ANN201
     return strawberry_django.mutation(extensions=[AuthExtension(any_role_of=roles)], **kwargs)
 
 
+def admin_mutation(**kwargs):  # noqa: ANN201
+    """A mutation only an admin of the request's organization may run (the role is the membership's, not the token's)."""
+    return strawberry_django.mutation(extensions=[AuthExtension(org_roles=["admin"])], **kwargs)
+
+
 def subscription(**kwargs):  # noqa: ANN201
     """A subscription that requires authentication."""
     return strawberry.subscription(extensions=[AuthSubscribeExtension()], **kwargs)
@@ -56,6 +62,9 @@ def subscription(**kwargs):  # noqa: ANN201
 class Query:
     """The root query type."""
 
+    mail_providers: list[types.MailProvider] = field(description="The providers the organization set up; every mailbox is linked through one.")
+    mail_provider: types.MailProvider = field(resolver=queries.mail_provider, description="A provider by id.")
+    provider_kinds: list[types.ProviderKind] = field(resolver=queries.provider_kinds, description="The kinds of provider this server can run, each with its capabilities.")
     mail_accounts: list[types.MailAccount] = field(description="The mailboxes the caller sees: their own, shared with them, and the organization's.")
     mail_account: types.MailAccount = field(resolver=queries.mail_account, description="A mailbox by id.")
     mail_folders: list[types.MailFolder] = field(description="Folders of the visible mailboxes (filter by `account`).")
@@ -77,7 +86,6 @@ class Query:
     outbox: list[types.OutgoingMessage] = field(description="Mail sent through the visible mailboxes, newest first.")
     outgoing_message: types.OutgoingMessage = field(resolver=queries.outgoing_message, description="A sent message by id.")
     mail_presets: list[types.MailPreset] = field(resolver=queries.mail_presets, description="Server settings of well-known providers (the one for `address`, when given).")
-    oauth_providers: list[enums.Provider] = field(resolver=queries.oauth_providers, name="oauthProviders", description="Providers this deployment can link through OAuth.")
     auth_session: types.AuthSession = field(resolver=mutations.auth_session, description="Where a login is. No side effect.")
 
 
@@ -85,8 +93,15 @@ class Query:
 class Mutation:
     """The root mutation type."""
 
+    # Providers (admins only)
+    create_server_provider = admin_mutation(resolver=mutations.create_server_provider, description="Admins: set up an IMAP provider, with fixed servers or open to any.")
+    update_server_provider = admin_mutation(resolver=mutations.update_server_provider, description="Admins: change an IMAP provider; its mailboxes follow new fixed servers.")
+    create_oauth_provider = admin_mutation(resolver=mutations.create_oauth_provider, name="createOAuthProvider", description="Admins: set up a Gmail or Microsoft OAuth client as a provider.")
+    update_oauth_provider = admin_mutation(resolver=mutations.update_oauth_provider, name="updateOAuthProvider", description="Admins: change a Gmail or Microsoft provider; an empty secret keeps the stored one.")
+    update_provider = admin_mutation(resolver=mutations.update_provider, description="Admins: rename, enable or disable any provider, or change its capabilities.")
+    delete_provider = admin_mutation(resolver=mutations.delete_provider, description="Admins: remove a provider no mailbox goes through.")
     # Mailboxes
-    create_mail_account = mutation(resolver=mutations.create_mail_account, description="Link a mailbox with a username and (app) password; the login is tested first.")
+    create_mail_account = mutation(resolver=mutations.create_mail_account, description="Link a mailbox with a username and (app) password through an IMAP provider; the login is tested first.")
     update_mail_account = mutation(resolver=mutations.update_mail_account, description="Change a mailbox (owner only); new servers or credentials are tested first.")
     test_mail_account = mutation(resolver=mutations.test_mail_account, description="Log in to a mailbox's servers now.")
     delete_mail_account = mutation(resolver=mutations.delete_mail_account, description="Unlink a mailbox (owner only). Mail on the server is untouched.")
@@ -94,7 +109,7 @@ class Mutation:
     update_mail_folder = mutation(resolver=mutations.update_mail_folder, description="Turn syncing a folder on or off.")
     sync_mail_account = mutation(resolver=mutations.sync_mail_account, description="Sync a mailbox now.")
     # OAuth (Gmail, Microsoft)
-    start_oauth_link = mutation(resolver=mutations.start_oauth_link, name="startOAuthLink", description="Start linking (or re-linking) a mailbox through OAuth.")
+    start_oauth_link = mutation(resolver=mutations.start_oauth_link, name="startOAuthLink", description="Start linking (or re-linking) a mailbox through a Gmail or Microsoft provider.")
     complete_auth = mutation(resolver=mutations.complete_auth, description="REDIRECT: finish with the code. POLL: advance one step; call until not PENDING.")
     resume_auth = mutation(resolver=mutations.resume_auth, description="The same login again (a fresh openUrl if the old one cannot be reused).")
     cancel_auth = mutation(resolver=mutations.cancel_auth, description="Drop a login that will not be finished. Idempotent.")

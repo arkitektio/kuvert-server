@@ -3,8 +3,9 @@
 Every organization has the agent, so each action is handed the slug of the organization the run
 is for and does that organization's share of the work, nothing else:
 
-* ``sync_all_mailboxes`` -- one sync pass of every ACTIVE mailbox of the organization. A mailbox a
-  user is syncing right now is skipped; its lease is the same one.
+* ``sync_all_mailboxes`` -- one sync pass of every ACTIVE mailbox of the organization whose
+  provider is enabled and has SCHEDULED_SYNC switched on. A mailbox a user is syncing right now is
+  skipped; its lease is the same one.
 * ``flush_mail_changes`` -- push the organization's queued local changes that are due; only
   mailboxes that have some are connected to.
 * ``reembed_stale`` -- embed the organization's messages whose vector is missing or from another
@@ -32,7 +33,13 @@ logger = logging.getLogger(__name__)
 
 
 def _active_accounts(organization: str) -> list[int]:
-    return list(models.MailAccount.objects.filter(organization__slug=organization, status=models.MailAccountStatus.ACTIVE).order_by("last_synced_at", "id").values_list("id", flat=True))
+    rows = models.MailAccount.objects.filter(
+        organization__slug=organization,
+        status=models.MailAccountStatus.ACTIVE,
+        mail_provider__enabled=True,
+        mail_provider__capabilities__contains=[models.ProviderCapability.SCHEDULED_SYNC.value],
+    )
+    return list(rows.order_by("last_synced_at", "id").values_list("id", flat=True))
 
 
 @agent.action(
@@ -56,7 +63,7 @@ async def sync_all_mailboxes(organization: str) -> dict:
 
 
 def _due_accounts(organization: str) -> list[int]:
-    due = models.MailChange.objects.filter(account__organization__slug=organization, state=models.MailChangeState.PENDING, push_after__lte=timezone.now(), account__status=models.MailAccountStatus.ACTIVE)
+    due = models.MailChange.objects.filter(account__organization__slug=organization, state=models.MailChangeState.PENDING, push_after__lte=timezone.now(), account__status=models.MailAccountStatus.ACTIVE, account__mail_provider__enabled=True)
     return sorted(set(due.values_list("account_id", flat=True)))
 
 

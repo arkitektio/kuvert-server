@@ -21,7 +21,7 @@ from email.utils import formataddr, format_datetime, make_msgid
 from django.conf import settings
 from django.utils import timezone
 
-from mail import accounts, changes, models, storage, sync
+from mail import accounts, changes, models, providers, storage, sync
 from mail.errors import MailError, code_for, not_configured
 from mail.protocols.clients import open_smtp
 from mail.sync import imap as imap_sync
@@ -136,7 +136,8 @@ def send(outgoing: models.OutgoingMessage) -> models.OutgoingMessage:
 
 
 def prepare(account: models.MailAccount, creator, *, to: list[dict], cc: list[dict], bcc: list[dict], subject: str, text: str, html: str, in_reply_to: models.Message | None, attachments: list) -> models.OutgoingMessage:  # noqa: ANN001
-    """Validate and record a message to send (status SENDING)."""
+    """Validate and record a message to send (status SENDING); NOT_CONFIGURED when the mailbox's provider does not send."""
+    providers.require(account.mail_provider, models.ProviderCapability.SEND)
     recipients = [*to, *cc, *bcc]
     if not recipients:
         raise MailError("A message needs at least one recipient.", models.MailErrorCode.SEND_REJECTED)

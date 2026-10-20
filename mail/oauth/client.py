@@ -1,8 +1,11 @@
 """OAuth 2.0 (authorization code + PKCE) for Gmail and Microsoft mailboxes, and token refresh.
 
-Blocking HTTP (``urllib``): callers run it in a worker thread, like the mail protocols. Endpoints,
-scopes and hosts default to the providers' public ones and can be overridden per provider in the
-``oauth`` config block (tests point them at a fake).
+The client is the organization's: a provider row holds its id, redirect URLs and (encrypted)
+secret (:mod:`mail.providers`). Where it talks to is the deployment's: endpoints, scopes and mail
+hosts default to the providers' public ones and can be overridden per kind in the ``oauth`` config
+block (tests point them at a fake), never by a row -- the service itself posts to them.
+
+Blocking HTTP (``urllib``): callers run it in a worker thread, like the mail protocols.
 
 Scopes: Google's IMAP/POP/SMTP access needs the full ``https://mail.google.com/`` scope;
 Microsoft's are the Outlook resource's ``IMAP.AccessAsUser.All``, ``POP.AccessAsUser.All`` and
@@ -21,7 +24,8 @@ from dataclasses import dataclass
 
 from django.conf import settings
 
-from mail.errors import MailError, not_configured
+from mail import crypto, models, providers
+from mail.errors import MailError
 from mail.models import MailErrorCode, Provider
 
 
@@ -51,8 +55,8 @@ DEFAULTS: dict[str, ProviderDefaults] = {
     ),
     Provider.MICROSOFT: ProviderDefaults(
         config_key="microsoft",
-        authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-        token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        authorize_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
         scopes=(
             "https://outlook.office.com/IMAP.AccessAsUser.All",
             "https://outlook.office.com/POP.AccessAsUser.All",
@@ -71,7 +75,7 @@ DEFAULTS: dict[str, ProviderDefaults] = {
 
 @dataclass(frozen=True)
 class OAuthClient:
-    """A configured provider: defaults with the deployment's overrides applied."""
+    """A provider's OAuth client: its row's id and secret, at the kind's endpoints with the deployment's overrides applied."""
 
     provider: str
     client_id: str
@@ -107,21 +111,20 @@ class TokenRevoked(MailError):
         super().__init__(message, MailErrorCode.CONSENT_EXPIRED)
 
 
-def client_for(provider: str) -> OAuthClient:
-    """The configured client of ``provider``; NOT_CONFIGURED without one."""
-    defaults = DEFAULTS.get(provider)
+def client_for(row: models.MailProvider) -> OAuthClient:
+    """The OAuth client of a Gmail or Microsoft provider row."""
+    defaults = DEFAULTS.get(row.kind)
     if defaults is None:
-        raise MailError(f"{provider} mailboxes are not linked with OAuth.", MailErrorCode.INVALID_STATE)
-    conf = (settings.KUVERT_OAUTH or {}).get(defaults.config_key)
-    if not conf:
-        raise not_configured(f"OAuth for {provider}")
+        raise MailError(f"{row.kind} mailboxes are not linked with OAuth.", MailErrorCode.INVALID_STATE)
+    values = providers.oauth_settings(row)
+    conf = (settings.KUVERT_OAUTH or {}).get(defaults.config_key) or {}
     return OAuthClient(
-        provider=provider,
-        client_id=conf["client_id"],
-        client_secret=conf.get("client_secret"),
-        redirect_urls=tuple(conf["redirect_urls"]),
-        authorize_url=conf.get("authorize_url") or defaults.authorize_url,
-        token_url=conf.get("token_url") or defaults.token_url,
+        provider=row.kind,
+        client_id=values.client_id,
+        client_secret=crypto.decrypt_optional(row.secret),
+        redirect_urls=tuple(values.redirect_urls),
+        authorize_url=conf.get("authorize_url") or defaults.authorize_url.format(tenant=values.tenant),
+        token_url=conf.get("token_url") or defaults.token_url.format(tenant=values.tenant),
         userinfo_url=conf.get("userinfo_url"),
         scopes=tuple(conf.get("scopes") or defaults.scopes),
         imap=(conf.get("imap_host") or defaults.imap[0], conf.get("imap_port") or defaults.imap[1], defaults.imap[2]),
@@ -130,12 +133,6 @@ def client_for(provider: str) -> OAuthClient:
         extra_params=defaults.extra_params,
         timeout=float(conf.get("timeout_seconds") or 20),
     )
-
-
-def configured_providers() -> list[str]:
-    """The providers this deployment has an OAuth client for."""
-    oauth = settings.KUVERT_OAUTH or {}
-    return [provider for provider, defaults in DEFAULTS.items() if oauth.get(defaults.config_key)]
 
 
 def pkce_pair() -> tuple[str, str]:

@@ -25,6 +25,8 @@ AUTHENTIKATE = {
         "test": {"sub": "1", "roles": ["editor"]},
         # Another member of the same organization, for visibility and owner-only checks.
         "colleague": {"sub": "2", "roles": ["editor"]},
+        # An admin of the same organization (roles come from the membership, see conftest), for provider setup.
+        "admin": {"sub": "3", "roles": ["admin"]},
         # A user in a different organization, for cross-tenant scoping tests.
         "othertest": {"sub": "9", "org": "other_org", "roles": ["editor"]},
     },
@@ -39,7 +41,7 @@ KUVERT_SYNC = {**KUVERT_SYNC, "connect_timeout_seconds": 10}
 # No undo windows: a change is pushed right after its request. Tests of the windows set them.
 KUVERT_WRITEBACK = {**KUVERT_WRITEBACK, "undo_seconds_moves": 0, "undo_seconds_deletes": 0}
 
-# `conftest.oauth` points both providers at the fake OAuth server of the test stack.
+# `conftest.fakeoauth` points both kinds' endpoints at the fake OAuth server of the test stack.
 KUVERT_OAUTH = {"google": None, "microsoft": None, "link_expires_seconds": 900}
 
 # Disable logging during tests to reduce noise

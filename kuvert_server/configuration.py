@@ -146,13 +146,10 @@ class MailSettings(BaseModel):
     user_agent: str = Field(default="kuvert", description="The X-Mailer header of sent mail, and the IMAP ID the service announces.")
 
 
-class OAuthProviderSettings(BaseModel):
-    """One OAuth 2.0 client (authorization code flow with PKCE) for XOAUTH2 mailbox access."""
+class OAuthEndpointSettings(BaseModel):
+    """Where the service talks to for one kind of OAuth provider. The clients themselves (id, secret, redirect URLs) are the organizations' providers, set up by their admins; only these addresses stay with the deployment, since the service itself posts to them."""
 
-    client_id: str = Field(description="The OAuth client id.")
-    client_secret: Optional[str] = Field(default=None, description="The OAuth client secret (a public client with PKCE has none). Secret.")
-    redirect_urls: List[str] = Field(description="Redirect URLs registered for the client. A client may pick one per link; the first is the default. Anything else is refused.")
-    authorize_url: Optional[str] = Field(default=None, description="Override the provider's authorization endpoint (tests, sovereign clouds).")
+    authorize_url: Optional[str] = Field(default=None, description="Override the provider's authorization endpoint (tests, sovereign clouds). Microsoft's default carries the provider's tenant.")
     token_url: Optional[str] = Field(default=None, description="Override the provider's token endpoint.")
     userinfo_url: Optional[str] = Field(default=None, description="Override the endpoint the mailbox address is read from.")
     scopes: Optional[List[str]] = Field(default=None, description="Override the scopes asked for. The defaults give IMAP, POP3 and SMTP access plus a refresh token.")
@@ -164,10 +161,10 @@ class OAuthProviderSettings(BaseModel):
 
 
 class OAuthSettings(BaseModel):
-    """OAuth clients per provider. A provider without one answers NOT_CONFIGURED; mailboxes with an app password still work."""
+    """The OAuth endpoints per kind of provider. Every value has the provider's public default, so the block is only needed to override one."""
 
-    google: Optional[OAuthProviderSettings] = Field(default=None, description="A Google Cloud OAuth client (Gmail).")
-    microsoft: Optional[OAuthProviderSettings] = Field(default=None, description="A Microsoft Entra app registration (Outlook, Microsoft 365).")
+    google: Optional[OAuthEndpointSettings] = Field(default=None, description="Gmail's endpoints.")
+    microsoft: Optional[OAuthEndpointSettings] = Field(default=None, description="Microsoft's endpoints.")
     link_expires_seconds: int = Field(default=900, description="How long a started OAuth link may be completed.")
 
 
@@ -182,7 +179,7 @@ class Settings(ServiceSettings):
     sync: SyncSettings = Field(default_factory=SyncSettings, description="How syncs run.")
     writeback: WritebackSettings = Field(default_factory=WritebackSettings, description="How local changes (flags, categories, moves, deletes) reach the server.")
     mail: MailSettings = Field(default_factory=MailSettings, description="Connection policy, rendering and sending.")
-    oauth: OAuthSettings = Field(default_factory=OAuthSettings, description="OAuth clients for Gmail and Microsoft mailboxes.")
+    oauth: OAuthSettings = Field(default_factory=OAuthSettings, description="Overrides of the Gmail and Microsoft OAuth endpoints (the clients are the organizations' providers).")
     embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings, description="Semantic search model and thresholds.")
     datalayer: Optional[DatalayerSettings] = Field(default=None, description="S3 storage for raw messages and attachments. Without it messages keep their text and attachment metadata only, and nothing can be attached to sent mail.")
     rekuest_hook: Optional[RekuestHookSettings] = Field(default=None, description="Expose `sync_all_mailboxes` to the hub's rekuest, which schedules it. Without it nothing syncs unless a client asks.")

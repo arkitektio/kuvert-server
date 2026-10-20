@@ -35,7 +35,7 @@ EMBEDDED_TEXT_CHARS = 1000
 class MailErrorCode(models.TextChoices):
     """What went wrong, for a client to offer a fix. Also stored as ``last_error_code``."""
 
-    NOT_CONFIGURED = "NOT_CONFIGURED", "The service is not configured for this (an OAuth client, the datalayer)"
+    NOT_CONFIGURED = "NOT_CONFIGURED", "The organization or the service is not set up for this (no usable provider, the datalayer)"
     AUTH_FAILED = "AUTH_FAILED", "The server refused the username or password"
     CONSENT_EXPIRED = "CONSENT_EXPIRED", "The OAuth grant was revoked or ran out; link the mailbox again"
     CONNECTION_FAILED = "CONNECTION_FAILED", "The server could not be reached, or the connection broke"
@@ -58,11 +58,18 @@ class MailErrorCode(models.TextChoices):
 
 
 class Provider(models.TextChoices):
-    """Who hosts a mailbox (decides OAuth, presets and Sent-copy behaviour)."""
+    """Who hosts a mailbox (decides OAuth, presets and Sent-copy behaviour); also the kind of a :class:`MailProvider`."""
 
     GENERIC = "GENERIC", "Any IMAP/POP3 server"
     GMAIL = "GMAIL", "Gmail / Google Workspace"
     MICROSOFT = "MICROSOFT", "Outlook.com / Microsoft 365"
+
+
+class ProviderCapability(models.TextChoices):
+    """What a provider may be used for, beyond reading mail (which every one does)."""
+
+    SEND = "SEND", "Send mail through its mailboxes' SMTP servers"
+    SCHEDULED_SYNC = "SCHEDULED_SYNC", "Let the unattended sync_all_mailboxes action sync its mailboxes"
 
 
 class Protocol(models.TextChoices):
@@ -172,6 +179,38 @@ class OAuthLinkStatus(models.TextChoices):
     CANCELLED = "CANCELLED", "The user dropped the login before it was finished"
 
 
+class MailProvider(Described):
+    """A provider an organization's admin set up: one kind, its settings and credentials, and what is switched on.
+
+    Every mailbox is linked through one. A Gmail or Microsoft provider is one OAuth client (its
+    id and redirect URLs in ``settings``, its secret Fernet-encrypted in ``secret``); an IMAP
+    provider is a mail server (fixed in ``settings``), or any server its members name. What a
+    kind's ``settings`` hold is :mod:`mail.providers`'s to validate; a kind needing other
+    settings needs no migration.
+    """
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="mail_providers", help_text="The organization this provider belongs to.")
+    creator = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="mail_providers", help_text="The admin who set it up.")
+    kind = models.CharField(max_length=20, choices=Provider.choices, help_text="Which kind of provider this is.")
+    name = models.CharField(max_length=200, help_text="What the organization calls it.")
+    enabled = models.BooleanField(default=True, help_text="A disabled provider links no mailbox, and its mailboxes neither sync, push nor send.")
+    capabilities = models.JSONField(default=list, blank=True, help_text="The ProviderCapability values switched on, a subset of what the kind can do.")
+    settings = models.JSONField(default=dict, blank=True, help_text="The kind's non-secret settings (OAuth: client id, redirect URLs; IMAP: the servers).")
+    secret = models.TextField(null=True, blank=True, help_text="Encrypted credentials of the kind (OAuth: the client secret). Never exposed.")
+    created_at = models.DateTimeField(auto_now_add=True, help_text="When the provider was set up.")
+    updated_at = models.DateTimeField(auto_now=True, help_text="When it was last changed.")
+    provenance = ProvenanceField(excluded_fields=["secret"])
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["organization", "name"], name="mail_provider_org_name"),
+        ]
+        indexes = [GinIndex(fields=["stored_descriptors"], name="mail_prov_desc_gin", opclasses=["jsonb_path_ops"])]
+
+    def __str__(self) -> str:
+        return f"{self.name} [{self.kind}]"
+
+
 class MailAccount(models.Model):
     """One linked mailbox: where it lives, how to log in, and how far it is synced.
 
@@ -186,6 +225,7 @@ class MailAccount(models.Model):
     email_address = models.CharField(max_length=320, help_text="The mailbox's address; the From of sent mail.")
     display_name = models.CharField(max_length=200, blank=True, default="", help_text="The sender name of sent mail.")
     provider = models.CharField(max_length=20, choices=Provider.choices, default=Provider.GENERIC, help_text="Who hosts the mailbox.")
+    mail_provider = models.ForeignKey(MailProvider, on_delete=models.SET_NULL, null=True, blank=True, related_name="accounts", help_text="The organization's provider the mailbox was linked through; null until it is attached to one.")
     status = models.CharField(max_length=20, choices=MailAccountStatus.choices, default=MailAccountStatus.ACTIVE, help_text="Where the mailbox is in its lifecycle.")
     visibility = models.CharField(max_length=20, choices=Visibility.choices, default=Visibility.PRIVATE, help_text="Who in the organization sees the mailbox and its mail.")
     shared_with = models.ManyToManyField(User, blank=True, related_name="shared_mail_accounts", help_text="Members who see the mailbox when it is SHARED.")
@@ -486,6 +526,7 @@ class OAuthLink(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="mail_oauth_links", help_text="The organization the link was started in.")
     creator = models.ForeignKey(User, on_delete=models.CASCADE, related_name="mail_oauth_links", help_text="The member who started it; only they complete, resume or cancel it.")
     provider = models.CharField(max_length=20, choices=Provider.choices, help_text="The OAuth provider.")
+    mail_provider = models.ForeignKey(MailProvider, on_delete=models.SET_NULL, null=True, blank=True, related_name="oauth_links", help_text="The organization's provider (its OAuth client) the login goes through.")
     protocol = models.CharField(max_length=10, choices=Protocol.choices, default=Protocol.IMAP, help_text="How the linked mailbox is read.")
     state = models.CharField(max_length=100, unique=True, help_text="Opaque value tying the provider's redirect back to this attempt.")
     code_verifier = models.TextField(help_text="Encrypted PKCE verifier. Never exposed.")

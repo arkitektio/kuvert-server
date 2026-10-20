@@ -8,27 +8,27 @@ from tests.conftest import CREATE, PASSWORD
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def _payload(address: str, host: str, port: int, security: str = "TLS") -> dict:
-    return {"emailAddress": address, "password": PASSWORD, "incoming": {"host": host, "port": port, "security": security}}
+def _payload(provider: str, address: str, host: str, port: int, security: str = "TLS") -> dict:
+    return {"provider": provider, "emailAddress": address, "password": PASSWORD, "incoming": {"host": host, "port": port, "security": security}}
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "db", "0.0.0.0"])
-async def test_internal_hosts_are_refused(aexecute, host):
-    result = await aexecute(CREATE, {"input": _payload("x@kuvert.test", host, 993)}, allow_errors=True)
+async def test_internal_hosts_are_refused(aexecute, provider_for, host):
+    result = await aexecute(CREATE, {"input": _payload(await provider_for(), "x@kuvert.test", host, 993)}, allow_errors=True)
     assert result.errors[0].extensions["code"] in ("HOST_NOT_ALLOWED", "CONNECTION_FAILED"), result.errors
     if host != "db":  # unresolvable outside the stack's network
         assert result.errors[0].extensions["code"] == "HOST_NOT_ALLOWED"
     assert not await models.MailAccount.objects.aexists()
 
 
-async def test_plaintext_is_refused(aexecute, backend_stack):
-    result = await aexecute(CREATE, {"input": _payload("x@kuvert.test", "localhost", backend_stack.smtp_port, "NONE")}, allow_errors=True)
+async def test_plaintext_is_refused(aexecute, provider_for, backend_stack):
+    result = await aexecute(CREATE, {"input": _payload(await provider_for(), "x@kuvert.test", "localhost", backend_stack.smtp_port, "NONE")}, allow_errors=True)
     assert result.errors[0].extensions["code"] == "TLS_REQUIRED"
 
 
-async def test_wrong_password_is_refused_before_storing(aexecute, greenmail, backend_stack):
+async def test_wrong_password_is_refused_before_storing(aexecute, provider_for, greenmail, backend_stack):
     address = greenmail.user()
-    payload = {**_payload(address, "localhost", backend_stack.imaps_port), "password": "wrong"}
+    payload = {**_payload(await provider_for(), address, "localhost", backend_stack.imaps_port), "password": "wrong"}
     result = await aexecute(CREATE, {"input": payload}, allow_errors=True)
     assert result.errors[0].extensions["code"] == "AUTH_FAILED"
     assert not await models.MailAccount.objects.aexists()

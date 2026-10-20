@@ -2,6 +2,10 @@
 
 Blocking (a token refresh is an HTTP call, and takes the mailbox's row lock so that one replica
 rotates a refresh token at a time); call it from the worker thread that also talks to the server.
+
+Credentials are only handed out for a mailbox whose provider may be used (:func:`provider_of`):
+so a disabled provider, or a mailbox left without one, neither syncs, pushes, sends nor tests its
+login, whichever of those asks.
 """
 
 from datetime import datetime, timedelta
@@ -9,7 +13,7 @@ from datetime import datetime, timedelta
 from django.db import transaction
 from django.utils import timezone
 
-from mail import crypto, models
+from mail import crypto, models, providers
 from mail.errors import MailError
 from mail.protocols.clients import Credentials, Endpoint
 
@@ -35,33 +39,40 @@ def ensure_active(account: models.MailAccount) -> None:
         raise MailError(f"This mailbox is {account.status.lower().replace('_', ' ')}.", models.MailErrorCode.MAILBOX_INACTIVE)
 
 
+def provider_of(account: models.MailAccount) -> models.MailProvider:
+    """The provider the mailbox goes through, if it may be used (NOT_CONFIGURED otherwise)."""
+    return providers.usable(account.mail_provider)
+
+
 def access_token(account: models.MailAccount) -> str:
     """A usable OAuth access token of the mailbox, refreshed first when it is (about to be) expired."""
-    from mail.oauth import providers
+    from mail.oauth import client as oauth
 
+    provider_of(account)
     now = timezone.now()
     if account.access_token and account.token_expires_at and account.token_expires_at - REFRESH_MARGIN > now:
         return crypto.decrypt(account.access_token)
     try:
         return _refreshed(account, now)
-    except providers.TokenRevoked as error:
+    except oauth.TokenRevoked as error:
         # Outside the refresh's transaction, which the error rolled back.
         models.MailAccount.objects.filter(pk=account.pk).update(status=models.MailAccountStatus.NEEDS_REAUTH, last_error=str(error), last_error_code=error.code)
         raise
 
 
 def _refreshed(account: models.MailAccount, now: datetime) -> str:
-    from mail.oauth import providers
+    from mail.oauth import client as oauth
 
     with transaction.atomic():
-        locked = models.MailAccount.objects.select_for_update().get(pk=account.pk)
+        locked = models.MailAccount.objects.select_for_update(of=("self",)).select_related("mail_provider").get(pk=account.pk)
         if locked.access_token and locked.token_expires_at and locked.token_expires_at - REFRESH_MARGIN > now:
             token = crypto.decrypt(locked.access_token)  # another replica refreshed meanwhile
         else:
             if not locked.secret:
-                raise providers.TokenRevoked("The mailbox has no refresh token; link it again.")
-            client = providers.client_for(locked.provider)
-            tokens = providers.refresh(client, crypto.decrypt(locked.secret))
+                raise oauth.TokenRevoked("The mailbox has no refresh token; link it again.")
+            # The refresh token was issued to this provider's client: no other one can use it.
+            client = oauth.client_for(provider_of(locked))
+            tokens = oauth.refresh(client, crypto.decrypt(locked.secret))
             token = tokens.access_token
             locked.access_token = crypto.encrypt(token)
             locked.token_expires_at = now + timedelta(seconds=tokens.expires_in or 3600)
@@ -76,6 +87,7 @@ def _refreshed(account: models.MailAccount, now: datetime) -> str:
 
 def incoming_credentials(account: models.MailAccount) -> Credentials:
     """How to log in to the incoming server."""
+    provider_of(account)
     if account.auth_method == models.AuthMethod.XOAUTH2:
         return Credentials(account.username, access_token=access_token(account))
     return Credentials(account.username, password=crypto.decrypt_optional(account.secret) or "")
@@ -83,6 +95,7 @@ def incoming_credentials(account: models.MailAccount) -> Credentials:
 
 def smtp_credentials(account: models.MailAccount) -> Credentials:
     """How to log in to the SMTP server (its own login when one is set)."""
+    provider_of(account)
     if account.auth_method == models.AuthMethod.XOAUTH2:
         return Credentials(account.username, access_token=access_token(account))
     if account.smtp_username:

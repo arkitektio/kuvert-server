@@ -30,17 +30,46 @@ Anyone who can see a mailbox can read, flag, move and delete its mail and send f
 member who linked it can change its credentials or sharing, or unlink it. A row the caller cannot
 see answers `NOT_FOUND`, exactly like a missing one.
 
+## Providers
+
+Every mailbox is linked through a provider (`mailProviders`), a row the organization's admins set
+up, as in bank. Members see them; only admins (the `admin` role of their membership) create,
+change or delete them. `providerKinds` lists the kinds and what each can do:
+
+| Kind | Set up with | Holds | Members link with |
+|---|---|---|---|
+| `GENERIC` (IMAP / POP3) | `createServerProvider` | fixed servers, or none (members name any server) | `createMailAccount` |
+| `GMAIL` | `createOAuthProvider` | a Google Cloud OAuth client (id, secret, redirect URLs) | `startOAuthLink` |
+| `MICROSOFT` | `createOAuthProvider` | an Entra app registration (id, secret, redirect URLs, tenant) | `startOAuthLink` |
+
+- **Capabilities** switch on what a provider is used for beyond reading mail: `SEND` (send
+  through its mailboxes) and `SCHEDULED_SYNC` (the `sync_all_mailboxes` action syncs them).
+- **Disabled** (`updateProvider(enabled: false)`): it links no mailbox, and its mailboxes
+  neither sync, push, send nor test their login (`NOT_CONFIGURED`). They stay ACTIVE.
+- **Fixed servers** can be changed (`updateServerProvider`), and its mailboxes follow without
+  testing their logins again. While mailboxes go through a provider, its protocol, whether its
+  servers are fixed, and an OAuth provider's client id stay as they are. A refresh token belongs
+  to its client, so a new client is a new provider, and mailboxes are re-linked through it.
+- **Deleting** is refused while mailboxes go through it; disable it instead.
+- A client secret is stored encrypted (`secrets.key_path`, rotated by `rotate_secrets`) and never
+  returned (`oauth.hasSecret`). The OAuth endpoints are the deployment's (`oauth.google`,
+  `oauth.microsoft` in the config), never a row's.
+- Mailboxes from before providers existed: password mailboxes got an open IMAP provider per
+  organization in the migration. OAuth mailboxes attach to the organization's first provider of
+  their kind when an admin creates it.
+
 ## Linking a mailbox
 
-**With a password** (or an app password):
-`createMailAccount(input: {emailAddress, password, protocol: IMAP|POP3, incoming?, smtp?})`.
-Servers default to the preset for the address's provider (`mailPresets(address)`). The login is
-tested before anything is stored. A wrong password fails with `AUTH_FAILED` and nothing is saved.
+**With a password** (or an app password), through an IMAP provider:
+`createMailAccount(input: {provider, emailAddress, password, protocol?, incoming?, smtp?})`.
+A provider with fixed servers takes only the login. Otherwise servers default to the preset for
+the address's provider (`mailPresets(address)`). The login is tested before anything is stored.
+A wrong password fails with `AUTH_FAILED` and nothing is saved.
 
-**With OAuth** (Gmail, Microsoft; Microsoft no longer accepts passwords). The flow matches
-bank's link flow:
+**With OAuth** (Gmail, Microsoft; Microsoft no longer accepts passwords), through a Gmail or
+Microsoft provider. The flow matches bank's link flow:
 
-1. `startOAuthLink(input: {provider: GMAIL, redirectUrl?})` returns an `AuthSession`. Open its
+1. `startOAuthLink(input: {provider, redirectUrl?})` returns an `AuthSession`. Open its
    `openUrl`.
 2. The provider redirects to `redirectUrl?code=…&state=…`.
 3. Call `completeAuth(input: {state, code})`. It answers with the `AuthSession`: `status` `DONE`
@@ -54,8 +83,10 @@ is passed on with `completeAuth(input: {state, error, errorDescription})`.
 
 The refresh token is stored encrypted, and access tokens are refreshed before use. If the user
 revokes access, the mailbox turns `NEEDS_REAUTH` (`CONSENT_EXPIRED`). To fix it, call
-`startOAuthLink(input: {provider, account})`, which re-links the same mailbox (its session
-names the mailbox in `result` from the start, and the mailbox carries it as `pendingAuth`).
+`startOAuthLink(input: {account})`, which re-links the same mailbox through its provider, or
+`startOAuthLink(input: {provider, account})` through another provider of its kind, which it then
+moves to (its session names the mailbox in `result` from the start, and the mailbox carries it
+as `pendingAuth`).
 
 Passwords and tokens are Fernet-encrypted at rest (`secrets.key_path`). They are never part of
 the schema and never written to history rows.

@@ -10,6 +10,7 @@ from mail import enums, models
     [
         (enums.MailErrorCode, models.MailErrorCode),
         (enums.Provider, models.Provider),
+        (enums.ProviderCapability, models.ProviderCapability),
         (enums.Protocol, models.Protocol),
         (enums.Security, models.Security),
         (enums.AuthMethod, models.AuthMethod),

@@ -62,6 +62,31 @@ def _requires(model: type, value: list[DescriptorConstraintInput], prefix: str) 
     return service.requires(model, value, prefix)
 
 
+@strawberry_django.filter_type(models.MailProvider)
+class MailProviderFilter:
+    """Filtering options for providers."""
+
+    @strawberry_django.filter_field
+    def ids(self, value: list[strawberry.ID], prefix: str) -> Q:
+        """Only these providers."""
+        return _ids(prefix, "id", value)
+
+    @strawberry_django.filter_field
+    def kind(self, value: enums.Provider, prefix: str) -> Q:
+        """Only providers of this kind."""
+        return Q(**{f"{prefix}kind": value.value})
+
+    @strawberry_django.filter_field
+    def enabled(self, value: bool, prefix: str) -> Q:
+        """Only enabled (true) or disabled (false) providers."""
+        return Q(**{f"{prefix}enabled": value})
+
+    @strawberry_django.filter_field
+    def requires(self, value: list[DescriptorConstraintInput], prefix: str) -> Q:
+        """Only providers satisfying every one of these descriptor constraints: a port's `requires`, handed on unchanged. A key providers do not declare is refused."""
+        return _requires(models.MailProvider, value, prefix)
+
+
 @strawberry_django.filter_type(models.MailAccount)
 class MailAccountFilter:
     """Filtering options for mailboxes."""
@@ -80,6 +105,11 @@ class MailAccountFilter:
     def search(self, value: str, prefix: str) -> Q:
         """Name, address or sender name contains this (case-insensitive)."""
         return Q(**{f"{prefix}name__icontains": value}) | Q(**{f"{prefix}email_address__icontains": value}) | Q(**{f"{prefix}display_name__icontains": value})
+
+    @strawberry_django.filter_field
+    def provider(self, value: strawberry.ID, prefix: str) -> Q:
+        """Only mailboxes linked through this provider."""
+        return Q(**{f"{prefix}mail_provider_id": value})
 
     @strawberry_django.filter_field
     def mine(self, info: Info, value: bool, prefix: str) -> Q:

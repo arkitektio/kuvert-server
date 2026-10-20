@@ -19,8 +19,20 @@ SCOPES = [
 
 #: What exists on a hub because this service is there: said here, as data, so the hub knows it from
 #: the image. ``service.py`` binds each of these to its model and refuses anything not said here.
+PROVIDER_DESCRIPTORS = [
+    Descriptor(key="@kuvert/provider_kind", type="STRING", description="The kind of provider: GENERIC (an IMAP or POP3 server), GMAIL or MICROSOFT"),
+    Descriptor(key="@kuvert/enabled", type="BOOL", description="Whether it links mailboxes, and they sync and send"),
+    Descriptor(key="@kuvert/capabilities", type="LIST", description="What is switched on (SEND, SCHEDULED_SYNC)"),
+]
+
 HOSTS = Hosts(
     structures=[
+        Structure(
+            identifier="@kuvert/mailprovider",
+            label="Mail Provider",
+            description="A provider an organization set up (an IMAP server, a Gmail or Microsoft OAuth client), through which mailboxes are linked.",
+            descriptors=PROVIDER_DESCRIPTORS,
+        ),
         Structure(
             identifier="@kuvert/message",
             label="Message",
@@ -47,6 +59,12 @@ HOSTS = Hosts(
         ),
     ],
     signals=[
+        Signal(
+            identifier="@kuvert/mailprovider",
+            kinds=["CREATED", "UPDATED", "DELETED"],
+            descriptors=[descriptor.key for descriptor in PROVIDER_DESCRIPTORS],
+            description="A provider was set up, changed (enabled, its capabilities, its servers or client) or removed.",
+        ),
         Signal(
             identifier="@kuvert/message",
             kinds=["CREATED"],
@@ -103,8 +121,8 @@ contract = Contract(
     debug=Start(("python", "manage.py", "runserver", "0.0.0.0:80")),
     jobs={
         "ensureadmin": Job(("ensureadmin",), "Create the operator account the config names"),
-        "rotate_secrets": Job(("rotate_secrets",), "Re-encrypt every stored mailbox credential with the first key of the key file"),
-        "restore_descriptors": Job(("restore_descriptors",), "Store the descriptors of every message, conversation and sent mail that misses one (--all: of every row)"),
+        "rotate_secrets": Job(("rotate_secrets",), "Re-encrypt every stored mailbox and provider credential with the first key of the key file"),
+        "restore_descriptors": Job(("restore_descriptors",), "Store the descriptors of every provider, message, conversation and sent mail that misses one (--all: of every row)"),
     },
     setup=("ensureadmin", "restore_descriptors"),
 )

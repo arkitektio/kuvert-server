@@ -24,6 +24,12 @@ __all__ = [
     "User",
     "Address",
     "ServerSettings",
+    "ProviderCapabilityInfo",
+    "ProviderKind",
+    "provider_kind",
+    "OAuthClientSettings",
+    "MailServerSettings",
+    "MailProvider",
     "MailAccount",
     "MailFolder",
     "Thread",
@@ -62,6 +68,117 @@ class ServerSettings:
     security: enums.Security
 
 
+def _server(value: object) -> Optional[ServerSettings]:
+    """A stored server (``mail.providers.Server``) as its GraphQL type."""
+    from mail.providers import Server
+
+    if not isinstance(value, Server):
+        return None
+    return ServerSettings(host=value.host, port=value.port, security=enums.Security(value.security.value))
+
+
+@strawberry.type(description="A capability a provider can have switched on, as shown to whoever switches it.")
+class ProviderCapabilityInfo:
+    capability: enums.ProviderCapability
+    label: str
+    description: str
+
+
+@strawberry.type(description="A kind of provider this server can run. What a client needs to offer it, without knowing the kinds itself.")
+class ProviderKind:
+    kind: enums.Provider
+    label: str
+    description: str
+    auth_method: enums.AuthMethod = strawberry.field(description="How its mailboxes log in: PASSWORD — link one with `createMailAccount`; XOAUTH2 — with `startOAuthLink`.")
+    capabilities: List[ProviderCapabilityInfo] = strawberry.field(description="Everything the kind can do; a provider enables a subset.")
+
+
+def provider_kind(kind: str) -> ProviderKind:
+    """A kind as :mod:`mail.providers` declares it."""
+    from mail.providers import CAPABILITIES, kind_of
+
+    info = kind_of(kind)
+    return ProviderKind(
+        kind=enums.Provider(info.kind.value),
+        label=info.label,
+        description=info.description,
+        auth_method=enums.AuthMethod(info.auth_method.value),
+        capabilities=[
+            ProviderCapabilityInfo(capability=enums.ProviderCapability(capability.value), label=entry.label, description=entry.description)
+            for capability, entry in CAPABILITIES.items()
+            if capability in info.capabilities
+        ],
+    )
+
+
+@strawberry.type(description="The OAuth client of a Gmail or Microsoft provider. Its secret is never returned.")
+class OAuthClientSettings:
+    client_id: str = strawberry.field(description="The OAuth client id.")
+    redirect_urls: List[str] = strawberry.field(description="The redirect URLs a login may use; the first is the default.")
+    tenant: str = strawberry.field(description="Microsoft: the Entra tenant logins go through (`common`: any account).")
+    has_secret: bool = strawberry.field(description="Whether a client secret is stored (a public client with PKCE has none).")
+
+
+@strawberry.type(description="The servers of an IMAP provider: fixed by the admin, or left to each member (`fixed` false).")
+class MailServerSettings:
+    fixed: bool = strawberry.field(description="True: its mailboxes use these servers, members only give their login. False: members name the servers.")
+    protocol: Optional[enums.Protocol] = strawberry.field(description="With fixed servers: how incoming mail is read.")
+    incoming: Optional[ServerSettings] = strawberry.field(description="With fixed servers: the IMAP or POP3 server.")
+    smtp: Optional[ServerSettings] = strawberry.field(description="With fixed servers: the SMTP server (null: its mailboxes cannot send).")
+    save_sent_copy: bool = strawberry.field(description="Whether its mailboxes append sent mail to Sent.")
+
+
+@kante.django_type(models.MailProvider, pagination=True, filters=filters.MailProviderFilter, description="A provider the organization's admins set up (an IMAP server, a Gmail or Microsoft OAuth client). Every mailbox is linked through one; credentials are never returned.")
+class MailProvider(OrgScoped):
+    id: strawberry.ID
+    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, only=["stored_descriptors"], description=DESCRIPTORS_DESCRIPTION)
+    name: str
+    kind: enums.Provider
+    enabled: bool = strawberry_django.field(description="A disabled provider links no mailbox, and its mailboxes neither sync, push nor send.")
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    creator: Optional[User]
+    organization: Organization
+
+    @strawberry_django.field(description="The capabilities switched on for this provider.")
+    def capabilities(self) -> List[enums.ProviderCapability]:
+        return [enums.ProviderCapability(value) for value in self.capabilities]  # type: ignore[attr-defined]
+
+    @strawberry_django.field(description="What its kind is and can do.")
+    def kind_info(self) -> ProviderKind:
+        return provider_kind(self.kind)  # type: ignore[arg-type]
+
+    @strawberry_django.field(description="How many mailboxes of the organization are linked through it (all of them, whoever sees them).")
+    def mailbox_count(self) -> int:
+        return models.MailAccount.objects.filter(mail_provider_id=self.id).count()
+
+    @strawberry_django.field(description="Its OAuth client when it is a Gmail or Microsoft provider, else null.")
+    def oauth(self) -> Optional[OAuthClientSettings]:
+        from mail import providers
+
+        row: models.MailProvider = self  # type: ignore[assignment]
+        if providers.kind_of(row.kind).auth_method != models.AuthMethod.XOAUTH2:
+            return None
+        values = providers.oauth_settings(row)
+        return OAuthClientSettings(client_id=values.client_id, redirect_urls=values.redirect_urls, tenant=values.tenant, has_secret=bool(row.secret))
+
+    @strawberry_django.field(description="Its servers when it is an IMAP provider, else null.")
+    def server(self) -> Optional[MailServerSettings]:
+        from mail import providers
+
+        row: models.MailProvider = self  # type: ignore[assignment]
+        if row.kind != models.Provider.GENERIC:
+            return None
+        values = providers.server_settings(row)
+        return MailServerSettings(
+            fixed=values.fixed,
+            protocol=enums.Protocol(values.protocol.value) if values.protocol else None,
+            incoming=_server(values.incoming),
+            smtp=_server(values.smtp),
+            save_sent_copy=values.save_sent_copy,
+        )
+
+
 @kante.django_type(models.MailAccount, pagination=True, filters=filters.MailAccountFilter, description="A linked mailbox. Private to the member who linked it unless shared (`visibility`).")
 class MailAccount(OrgScoped):
     id: strawberry.ID
@@ -69,6 +186,7 @@ class MailAccount(OrgScoped):
     email_address: str
     display_name: str
     provider: enums.Provider
+    mail_provider: Optional[MailProvider] = strawberry_django.field(description="The organization's provider the mailbox was linked through (null: none any more; an admin has to set one up).")
     status: enums.MailAccountStatus
     visibility: enums.Visibility
     protocol: enums.Protocol
@@ -113,9 +231,12 @@ class MailAccount(OrgScoped):
     def is_owner(self, info: Info) -> bool:
         return self.creator_id == info.context.request.user.id  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="Whether the mailbox can send (it has an SMTP server).")
+    @strawberry_django.field(select_related=["mail_provider"], description="Whether the mailbox can send: it has an SMTP server, and its provider is enabled with SEND switched on.")
     def can_send(self) -> bool:
-        return bool(self.smtp_host and self.smtp_port)
+        from mail import providers
+
+        provider = self.mail_provider  # type: ignore[attr-defined]
+        return bool(self.smtp_host and self.smtp_port and provider is not None and provider.enabled and providers.has(provider, models.ProviderCapability.SEND))
 
     @strawberry_django.field(description="Whether folders, moves and flags live on the server (IMAP). On POP3 flags are local and moves are refused.")
     def server_side_folders(self) -> bool:
@@ -442,7 +563,7 @@ class MailPreset:
     smtp: Optional[ServerSettings]
     save_sent_copy: bool
     oauth: bool = strawberry.field(description="The provider is linked through OAuth (`startOAuthLink`).")
-    oauth_configured: bool = strawberry.field(description="This deployment has an OAuth client for it.")
+    oauth_configured: bool = strawberry.field(description="The organization has an enabled provider for it (`mailProviders`).")
     note: str
 
 
