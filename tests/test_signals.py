@@ -95,8 +95,8 @@ def test_the_manifest_lists_what_kuvert_hosts_with_its_descriptors():
     hosted = {s["identifier"]: s for s in service.manifest()["structures"]}
     # Everything hosted is signalled (mail for team mailboxes only); nothing else is declared.
     assert set(hosted) == set(EXPECTED)
-    assert hosted["@kuvert/outgoingmessage"]["label"] == "Outgoing Message"
-    assert hosted["@kuvert/message"]["descriptors"] == [{"key": "@kuvert/has_attachments", "type": "BOOL", "description": "Whether it has attachments, not counting inline images"}]
+    assert hosted["@kuvert/outgoingmessage"]["label"] == "Outgoing Email"
+    assert hosted["@kuvert/message"]["descriptors"] == [{"key": "@kuvert/has_attachments", "type": "BOOL", "description": "Whether the email has attachments (attached files), not counting inline images"}]
     assert [(d["key"], d["type"]) for d in hosted["@kuvert/thread"]["descriptors"]] == [("@kuvert/message_count", "INT")]
     assert [(d["key"], d["type"]) for d in hosted["@kuvert/outgoingmessage"]["descriptors"]] == [("@kuvert/status", "STRING")]
     assert [(d["key"], d["type"]) for d in hosted["@kuvert/mailprovider"]["descriptors"]] == [("@kuvert/provider_kind", "STRING"), ("@kuvert/enabled", "BOOL"), ("@kuvert/capabilities", "LIST")]

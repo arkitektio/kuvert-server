@@ -20,9 +20,9 @@ SCOPES = [
 #: What exists on a hub because this service is there: said here, as data, so the hub knows it from
 #: the image. ``service.py`` binds each of these to its model and refuses anything not said here.
 PROVIDER_DESCRIPTORS = [
-    Descriptor(key="@kuvert/provider_kind", type="STRING", description="The kind of provider: GENERIC (an IMAP or POP3 server), GMAIL or MICROSOFT"),
-    Descriptor(key="@kuvert/enabled", type="BOOL", description="Whether it links mailboxes, and they sync and send"),
-    Descriptor(key="@kuvert/capabilities", type="LIST", description="What is switched on (SEND, SCHEDULED_SYNC)"),
+    Descriptor(key="@kuvert/provider_kind", type="STRING", description="The kind of provider: GENERIC (an IMAP or POP3 mail server), GMAIL (Gmail, Google Workspace) or MICROSOFT (Outlook.com, Microsoft 365)"),
+    Descriptor(key="@kuvert/enabled", type="BOOL", description="Whether it is switched on: it links mailboxes, and they sync and send mail"),
+    Descriptor(key="@kuvert/capabilities", type="LIST", description="What is switched on beyond reading mail: SEND (sending email) and SCHEDULED_SYNC"),
 ]
 
 HOSTS = Hosts(
@@ -30,31 +30,31 @@ HOSTS = Hosts(
         Structure(
             identifier="@kuvert/mailprovider",
             label="Mail Provider",
-            description="A provider an organization set up (an IMAP server, a Gmail or Microsoft OAuth client), through which mailboxes are linked.",
+            description="An email provider an organization set up (an IMAP mail server, a Gmail or Microsoft OAuth client), through which mailboxes (email accounts) are linked.",
             descriptors=PROVIDER_DESCRIPTORS,
         ),
         Structure(
             identifier="@kuvert/message",
-            label="Message",
-            description="A mail message in one folder of a mailbox.",
+            label="Email Message",
+            description="An email (e-mail message) in one folder of a mailbox, such as the inbox, with its sender, recipients, subject, body and attachments.",
             descriptors=[
-                Descriptor(key="@kuvert/has_attachments", type="BOOL", description="Whether it has attachments, not counting inline images"),
+                Descriptor(key="@kuvert/has_attachments", type="BOOL", description="Whether the email has attachments (attached files), not counting inline images"),
             ],
         ),
         Structure(
             identifier="@kuvert/thread",
-            label="Thread",
-            description="A conversation: the messages of a mailbox that answer one another.",
+            label="Email Thread",
+            description="A conversation: the emails of a mailbox that answer one another (replies and forwards), across its folders.",
             descriptors=[
-                Descriptor(key="@kuvert/message_count", type="INT", description="How many messages the conversation holds"),
+                Descriptor(key="@kuvert/message_count", type="INT", description="How many emails the conversation holds"),
             ],
         ),
         Structure(
             identifier="@kuvert/outgoingmessage",
-            label="Outgoing Message",
-            description="A message sent through a mailbox's SMTP server.",
+            label="Outgoing Email",
+            description="An email sent from a mailbox through its SMTP server: what was asked to be sent, and what happened.",
             descriptors=[
-                Descriptor(key="@kuvert/status", type="STRING", description="Where the message is: SENDING, SENT or FAILED"),
+                Descriptor(key="@kuvert/status", type="STRING", description="Where the outgoing email is: SENDING, SENT or FAILED"),
             ],
         ),
     ],
@@ -63,25 +63,25 @@ HOSTS = Hosts(
             identifier="@kuvert/mailprovider",
             kinds=["CREATED", "UPDATED", "DELETED"],
             descriptors=[descriptor.key for descriptor in PROVIDER_DESCRIPTORS],
-            description="A provider was set up, changed (enabled, its capabilities, its servers or client) or removed.",
+            description="A mail provider was set up, changed (enabled, its capabilities, its servers or client) or removed.",
         ),
         Signal(
             identifier="@kuvert/message",
             kinds=["CREATED"],
             descriptors=["@kuvert/has_attachments"],
-            description="Mail arrived in a team mailbox.",
+            description="New email arrived in a team mailbox (one every member of the organization sees).",
         ),
         Signal(
             identifier="@kuvert/thread",
             kinds=["CREATED", "UPDATED"],
             descriptors=["@kuvert/message_count"],
-            description="A conversation in a team mailbox started or grew.",
+            description="An email conversation (thread) in a team mailbox started or grew.",
         ),
         Signal(
             identifier="@kuvert/outgoingmessage",
             kinds=["CREATED", "UPDATED"],
             descriptors=["@kuvert/status"],
-            description="Mail from a team mailbox was queued, sent or failed.",
+            description="An email from a team mailbox was queued for sending, sent or failed.",
         ),
     ],
 )
