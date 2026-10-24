@@ -500,7 +500,7 @@ def datalayer(backend_stack, settings):
     import boto3
     from botocore.config import Config
 
-    import datalayer.datalayer as dl_module
+    import arkitekt_datalayer.datalayer as dl_module
     from kuvert_server import settings_test
 
     settings.DATALAYER = {**settings_test._DATALAYER_TEST, "access_key": "kuverttestroot", "secret_key": "kuverttestrootsecret", "port": backend_stack.rustfs_port}

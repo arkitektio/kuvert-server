@@ -1,8 +1,8 @@
 """Raw messages and attachments in the datalayer, written by the service itself.
 
-The vendored datalayer creates stores for *client* uploads (a grant, a PUT, a finish). A sync
+The datalayer (arkitekt_datalayer) creates stores for *client* uploads (a grant, a PUT, a finish). A sync
 writes with the service's own credentials instead: :func:`store_bytes` puts the object and
-creates its finished :class:`~datalayer.models.BigFileStore` in one step. Without a ``datalayer``
+creates its finished :class:`~arkitekt_datalayer.models.BigFileStore` in one step. Without a ``datalayer``
 config block nothing is stored and every function here is a no-op returning None.
 
 Stores are never deleted with the rows that reference them: :func:`orphan` marks them, and the
@@ -11,15 +11,13 @@ after a grace period.
 """
 
 import logging
-import uuid
 from datetime import timedelta
 
-from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
-from datalayer.datalayer import get_current_datalayer
-from datalayer.models import BigFileStore
+from arkitekt_datalayer.datalayer import get_current_datalayer, is_configured
+from arkitekt_datalayer.models import BigFileStore
 
 logger = logging.getLogger(__name__)
 
@@ -28,32 +26,19 @@ BUCKET_KEY = "bigfile"
 
 def enabled() -> bool:
     """Whether a datalayer is configured."""
-    return bool(getattr(settings, "DATALAYER", None))
+    return is_configured()
 
 
 def store_bytes(organization_id: int, creator_id: int | None, filename: str, payload: bytes, content_type: str) -> BigFileStore | None:
     """Put ``payload`` in the bucket and return its finished store (None without a datalayer)."""
     if not enabled():
         return None
-    layer = get_current_datalayer()
-    key = uuid.uuid4().hex
-    layer.put_file(BUCKET_KEY, key, payload, content_type)
-    return BigFileStore.objects.create(
-        organization_id=organization_id,
-        creator_id=creator_id,
-        key=key,
-        bucket=BUCKET_KEY,
-        path=layer.build_store_path(BUCKET_KEY, key),
-        original_file_name=filename[:1000] or None,
-        content_type=content_type[:255],
-        populated=True,
-        size_bytes=len(payload),
-    )
+    return get_current_datalayer().store_bytes(BigFileStore, organization_id, payload, creator_id=creator_id, original_file_name=filename or None, content_type=content_type)
 
 
 def read_bytes(store: BigFileStore) -> bytes:
     """The whole object of ``store``."""
-    return get_current_datalayer().read_object(BUCKET_KEY, store.key)
+    return store.read_bytes(get_current_datalayer())
 
 
 def orphan(store_ids: list[int]) -> None:

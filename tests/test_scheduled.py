@@ -6,7 +6,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
-from datalayer.models import BigFileStore
+from arkitekt_datalayer.models import BigFileStore
 from kuvert_server.hook_agent import agent
 from kuvert_server.service import service
 from mail import models

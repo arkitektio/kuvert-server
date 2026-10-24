@@ -13,7 +13,7 @@ from django.utils import timezone
 from kante.types import Info
 from strawberry.scalars import JSON
 
-from datalayer import types as datalayer_types
+from arkitekt_datalayer import types as datalayer_types
 from mail import enums, filters, models, sanitize
 from mail.types._shared import DESCRIPTORS_DESCRIPTION, OrgScoped, build_prescoped_queryset, resolve_descriptors
 from mail.types.auth import Organization, User

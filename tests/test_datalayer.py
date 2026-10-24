@@ -5,7 +5,7 @@ from email import policy
 
 import pytest
 
-from datalayer.models import BigFileStore
+from arkitekt_datalayer.models import BigFileStore
 from mail import models, storage
 
 pytestmark = pytest.mark.django_db(transaction=True)

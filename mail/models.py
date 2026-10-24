@@ -24,7 +24,7 @@ from django.db import models
 from django.db.models.functions import Lower
 from koherent.fields import ProvenanceField
 
-from datalayer.models import BigFileStore
+from arkitekt_datalayer.models import BigFileStore
 from embeddings import engine
 from embeddings.models import EmbeddedDescriptionMixin, embedding_indexes
 

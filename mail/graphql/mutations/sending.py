@@ -7,7 +7,7 @@ from channels.db import database_sync_to_async
 from kante.errors import ValidationError
 from kante.types import Info
 
-from datalayer.models import BigFileStore
+from arkitekt_datalayer.models import BigFileStore
 from mail import models, send, types
 from mail.graphql.errors import translated
 from mail.graphql.utils import get_or_404

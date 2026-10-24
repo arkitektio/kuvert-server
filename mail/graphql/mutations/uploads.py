@@ -6,10 +6,10 @@ ids), so that would hand any member the bytes of another member's private mail. 
 caller requested themselves, and that no message references, can be finished.
 """
 
-from datalayer import inputs as datalayer_inputs
-from datalayer import types as datalayer_types
-from datalayer.datalayer import get_current_datalayer
-from datalayer.models import BigFileStore
+from arkitekt_datalayer import inputs as datalayer_inputs
+from arkitekt_datalayer import types as datalayer_types
+from arkitekt_datalayer.datalayer import get_current_datalayer
+from arkitekt_datalayer.models import BigFileStore
 from django.db.models import Q
 from kante.errors import NotFound
 from kante.types import Info

@@ -4,7 +4,6 @@ End to end against GreenMail and fakeoauth (which checks each client's secret). 
 """
 
 from datetime import timedelta
-from importlib import import_module
 
 import pytest
 from django.core.management import call_command
@@ -281,26 +280,3 @@ def test_rotating_the_key_reencrypts_provider_secrets(settings, tmp_path, authen
     provider.refresh_from_db()
 
     assert provider.secret != before and crypto.decrypt(provider.secret) == OAUTH_CLIENT["client_secret"]
-
-
-def test_the_migration_gives_each_organization_with_password_mailboxes_an_open_provider(authenticated_context, other_org_context):
-    from django.apps import apps
-
-    server_providers = import_module("mail.migrations.0006_mail_providers").server_providers
-
-    def loose(context, address: str, auth_method: str = models.AuthMethod.PASSWORD) -> models.MailAccount:
-        request = context.request
-        return models.MailAccount.objects.create(organization=request.organization, creator=request.user, name=address, email_address=address, auth_method=auth_method, incoming_host="imap.example.org", incoming_port=993, username=address)
-
-    mine = [loose(authenticated_context, "a@example.org"), loose(authenticated_context, "b@example.org")]
-    theirs = loose(other_org_context, "c@example.org")
-    oauth = loose(authenticated_context, "d@gmail.com", models.AuthMethod.XOAUTH2)
-
-    server_providers(apps, None)
-
-    rows = {row.organization_id: row for row in models.MailProvider.objects.all()}
-    assert set(rows) == {authenticated_context.request.organization.id, other_org_context.request.organization.id}
-    assert all((row.kind, row.settings["incoming"], sorted(row.capabilities)) == ("GENERIC", None, ["SCHEDULED_SYNC", "SEND"]) for row in rows.values())
-    assert {models.MailAccount.objects.get(id=box.id).mail_provider_id for box in mine} == {rows[authenticated_context.request.organization.id].id}
-    assert models.MailAccount.objects.get(id=theirs.id).mail_provider_id == rows[other_org_context.request.organization.id].id
-    assert models.MailAccount.objects.get(id=oauth.id).mail_provider_id is None

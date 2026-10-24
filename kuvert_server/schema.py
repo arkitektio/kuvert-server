@@ -18,15 +18,14 @@ import strawberry
 import strawberry_django
 from authentikate.strawberry.directives import AuthExtension, AuthSubscribeExtension
 from authentikate.strawberry.extension import AuthentikateExtension
-from django.conf import settings
 from koherent.strawberry.extension import KoherentExtension
 from strawberry.schema.config import StrawberryConfig
 from strawberry_django.optimizer import DjangoOptimizerExtension
 
-from datalayer import mutations as datalayer_mutations
-from datalayer import scalars as datalayer_scalars
-from datalayer import types as datalayer_types
-from datalayer.datalayer import DatalayerConfig
+from arkitekt_datalayer import mutations as datalayer_mutations
+from arkitekt_datalayer import scalars as datalayer_scalars
+from arkitekt_datalayer import types as datalayer_types
+from arkitekt_datalayer.datalayer import load_config
 from kuvert_server.logs import QuietErrorsSchema
 from mail import types
 from mail.graphql import mutations, queries, subscriptions
@@ -44,7 +43,7 @@ def mutation(**kwargs):  # noqa: ANN201
 
 def upload_mutation(**kwargs):  # noqa: ANN201
     """A mutation that hands out (or finishes) upload credentials: gated by ``datalayer.upload_roles``."""
-    roles = DatalayerConfig(**getattr(settings, "DATALAYER", {})).upload_roles
+    roles = load_config().upload_roles
     return strawberry_django.mutation(extensions=[AuthExtension(any_role_of=roles)], **kwargs)
 
 
@@ -141,7 +140,7 @@ class Mutation:
     unlink_threads = mutation(resolver=mutations.unlink_threads, description="Take conversations out of a task.")
     # Sending
     send_message = mutation(resolver=mutations.send_message, description="Send a message through a mailbox's SMTP server.")
-    # Uploads for attachments (the vendored datalayer): request a grant, write the file to S3, finish, then attach it.
+    # Uploads for attachments (the datalayer): request a grant, write the file to S3, finish, then attach it.
     request_bigfile_upload = upload_mutation(resolver=datalayer_mutations.request_bigfile_upload, description="Request temporary S3 credentials to upload one file (an attachment to send).")
     finish_bigfile_upload = upload_mutation(resolver=mutations.finish_bigfile_upload, description="Finalize the caller's file upload after the client has written the object.")
 

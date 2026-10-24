@@ -50,7 +50,7 @@ INSTALLED_APPS = [
     "channels",
     "django_probes",
     "polymorphic",
-    "datalayer",
+    "arkitekt_datalayer",
     "mail",
     "health_check",  # required for health checks
     "health_check.db",  # stock Django health checkers
@@ -178,7 +178,7 @@ KUVERT_SYNC = conf.sync.model_dump()
 KUVERT_WRITEBACK = conf.writeback.model_dump()
 KUVERT_MAIL = conf.mail.model_dump()
 KUVERT_OAUTH = conf.oauth.model_dump()
-# The vendored datalayer reads only this; empty without a `datalayer` block (raw messages and
+# The datalayer (arkitekt_datalayer) reads only this; empty without a `datalayer` block (raw messages and
 # attachments are then not stored, and uploads answer NOT_CONFIGURED).
 DATALAYER = conf.datalayer.model_dump(exclude_none=True) if conf.datalayer else {}
 
