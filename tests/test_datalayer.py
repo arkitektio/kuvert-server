@@ -46,7 +46,7 @@ async def test_deleted_mail_orphans_its_files(mailbox, greenmail, sync, datalaye
     assert not await BigFileStore.objects.filter(id=message.raw_id).aexists()
 
 
-UPLOAD = 'mutation($name: String!, $size: ByteCount) { requestBigfileUpload(input: {originalFileName: $name, fileSize: $size, contentType: "text/plain"}) { accessKey secretKey sessionToken region bucket key store } }'
+UPLOAD = 'mutation($name: String!, $size: ByteCount!) { requestBigfileUpload(input: {originalFileName: $name, fileSize: $size, contentType: "text/plain"}) { accessKey secretKey sessionToken region bucket key store } }'
 FINISH = 'mutation($id: String!) { finishBigfileUpload(input: {storeId: $id}) { id sizeBytes } }'
 
 

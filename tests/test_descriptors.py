@@ -49,7 +49,7 @@ async def test_an_object_answers_the_descriptors_its_structure_declares(mailbox,
 
 def test_the_field_answers_what_the_signal_carried(intake, authenticated_context):  # noqa: F811
     account = models.MailAccount.objects.create(
-        organization=Organization.objects.get(slug="static_org"), name="Team box", email_address="team@example.org",
+        organization=Organization.objects.get(identifier="static_issuer#static_org"), name="Team box", email_address="team@example.org",
         incoming_host="imap.example.org", incoming_port=993, username="team", visibility=models.Visibility.ORGANIZATION,
     )
     thread = models.Thread.objects.create(account=account, message_count=3)

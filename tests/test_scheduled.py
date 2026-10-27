@@ -14,7 +14,7 @@ from mail.scheduled import purge_orphaned_stores, reembed_stale, sync_all_mailbo
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
-MINE, THEIRS = "static_org", "other_org"
+MINE, THEIRS = "static_issuer#static_org", "static_issuer#other_org"
 
 
 def test_actions_are_offered_and_wired_to_nothing(settings):
@@ -72,7 +72,7 @@ def _messages(box: dict):
 async def test_a_sync_for_one_organization_touches_only_its_mailboxes(boxes):
     mine, theirs = boxes
 
-    assert await sync_all_mailboxes("nobody") == {"synced": 0, "skipped": 0, "failed": 0, "created": 0}
+    assert await sync_all_mailboxes("static_issuer#nobody") == {"synced": 0, "skipped": 0, "failed": 0, "created": 0}
     assert await sync_all_mailboxes(THEIRS) == {"synced": 1, "skipped": 0, "failed": 0, "created": 1}
     assert await _messages(theirs).acount() == 1
     assert await _messages(mine).acount() == 0

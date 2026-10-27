@@ -84,7 +84,7 @@ def intake(settings):
 def _organization():
     from authentikate.models import Organization
 
-    return Organization.objects.get_or_create(slug="signals-test-org")[0]
+    return Organization.objects.get_or_create(identifier="static_issuer#signals-test-org")[0]
 
 
 def test_the_manifest_declares_every_model_signal():

@@ -1,6 +1,6 @@
 """The actions of kuvert's hook agent: work the hub's rekuest can ask for (``arkitekt_service.hook``).
 
-Every organization has the agent, so each action is handed the slug of the organization the run
+Every organization has the agent, so each action is handed the identifier of the organization the run
 is for and does that organization's share of the work, nothing else:
 
 * ``sync_all_mailboxes`` -- one sync pass of every ACTIVE mailbox of the organization whose
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 def _active_accounts(organization: str) -> list[int]:
     rows = models.MailAccount.objects.filter(
-        organization__slug=organization,
+        organization__identifier=organization,
         status=models.MailAccountStatus.ACTIVE,
         mail_provider__enabled=True,
         mail_provider__capabilities__contains=[models.ProviderCapability.SCHEDULED_SYNC.value],
@@ -63,7 +63,7 @@ async def sync_all_mailboxes(organization: str) -> dict:
 
 
 def _due_accounts(organization: str) -> list[int]:
-    due = models.MailChange.objects.filter(account__organization__slug=organization, state=models.MailChangeState.PENDING, push_after__lte=timezone.now(), account__status=models.MailAccountStatus.ACTIVE, account__mail_provider__enabled=True)
+    due = models.MailChange.objects.filter(account__organization__identifier=organization, state=models.MailChangeState.PENDING, push_after__lte=timezone.now(), account__status=models.MailAccountStatus.ACTIVE, account__mail_provider__enabled=True)
     return sorted(set(due.values_list("account_id", flat=True)))
 
 

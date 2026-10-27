@@ -169,7 +169,7 @@ async def test_a_disabled_provider_links_syncs_and_sends_nothing(aexecute, admin
     sent = await aexecute(SEND, {"a": box["id"], "to": greenmail.user()}, allow_errors=True)
     tested = await aexecute("mutation($id: ID!) { testMailAccount(id: $id) { id } }", {"id": box["id"]}, allow_errors=True)
     linked = await aexecute(CREATE, {"input": {"provider": provider, "emailAddress": greenmail.user(), "password": PASSWORD, "incoming": {"host": "localhost", "port": 1, "security": "TLS"}}}, allow_errors=True)
-    scheduled = await sync_all_mailboxes("static_org")
+    scheduled = await sync_all_mailboxes("static_issuer#static_org")
     account = (await aexecute(ACCOUNT, {"id": box["id"]})).data["mailAccount"]
 
     assert [r.errors[0].extensions["code"] for r in (synced, sent, tested, linked)] == ["NOT_CONFIGURED"] * 4
@@ -186,14 +186,14 @@ async def test_capabilities_decide_sending_and_scheduled_syncs(aexecute, admin_c
     receive_only = (await aexecute(UPDATE, {"input": {"id": provider, "capabilities": []}}, context=admin_context)).data["updateProvider"]
     can_send = (await aexecute(ACCOUNT, {"id": box["id"]})).data["mailAccount"]["canSend"]
     sent = await aexecute(SEND, {"a": box["id"], "to": greenmail.user()}, allow_errors=True)
-    skipped = await sync_all_mailboxes("static_org")
+    skipped = await sync_all_mailboxes("static_issuer#static_org")
     by_hand = (await aexecute(SYNC, {"id": box["id"]})).data["syncMailAccount"]
     await aexecute(UPDATE, {"input": {"id": provider, "capabilities": ["SEND", "SCHEDULED_SYNC"]}}, context=admin_context)
 
     assert receive_only["capabilities"] == [] and not can_send
     assert sent.errors[0].extensions["code"] == "NOT_CONFIGURED" and "Sending" in sent.errors[0].message
     assert skipped["synced"] == 0 and by_hand["created"] == 1
-    assert (await sync_all_mailboxes("static_org"))["synced"] == 1
+    assert (await sync_all_mailboxes("static_issuer#static_org"))["synced"] == 1
     assert (await aexecute(SEND, {"a": box["id"], "to": greenmail.user()})).data["sendMessage"]["status"] == "SENT"
 
 

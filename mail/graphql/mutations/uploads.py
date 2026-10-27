@@ -30,4 +30,4 @@ def finish_bigfile_upload(info: Info, input: datalayer_inputs.FinishBigFileUploa
     own = BigFileStore.objects.filter(id=payload.store_id, organization=request.organization, creator=request.user).exclude(_mail_stores())
     if not own.exists():
         raise NotFound(f"BigFileStore {payload.store_id} does not exist.")
-    return get_current_datalayer().finish_bigfile_upload(request.organization.id, payload)  # type: ignore[return-value]
+    return get_current_datalayer().finish_bigfile_upload(request.organization.id, payload, user=request.user)  # type: ignore[return-value]
