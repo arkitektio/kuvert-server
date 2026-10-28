@@ -16,19 +16,27 @@ DATABASES["default"] = {
     "PORT": os.environ.get("KUVERT_TEST_DB_PORT", "5432"),
 }
 
+#: What a test token is unless it says otherwise: kuvert's admin, through an app granted all of kuvert.
+ADMIN_WITH_EVERY_SCOPE = {"roles": ["kuvert_admin"], "scope": "openid kuvert_all"}
+
 # Django forces DEBUG=False under the test runner, and authentikate refuses static tokens when
 # DEBUG is False. These are deliberate test fixtures, so opt in explicitly.
 AUTHENTIKATE = {
     **AUTHENTIKATE,
     "allow_static_tokens_in_production": True,
     "static_tokens": {
-        "test": {"sub": "1", "roles": ["editor"]},
-        # Another member of the same organization, for visibility and owner-only checks.
-        "colleague": {"sub": "2", "roles": ["editor"]},
-        # An admin of the same organization (roles come from the membership, see conftest), for provider setup.
-        "admin": {"sub": "3", "roles": ["admin"]},
-        # A user in a different organization, for cross-tenant scoping tests.
-        "othertest": {"sub": "9", "org": "other_org", "roles": ["editor"]},
+        name: {**ADMIN_WITH_EVERY_SCOPE, **token}
+        for name, token in {
+            "test": {"sub": "1", "roles": ["kuvert_editor"]},
+            # Another member of the same organization, for visibility and owner-only checks.
+            "colleague": {"sub": "2", "roles": ["kuvert_editor"]},
+            # kuvert's admin in the same organization, for provider setup.
+            "admin": {"sub": "3"},
+            # A user in a different organization, for cross-tenant scoping tests.
+            "othertest": {"sub": "9", "org": "other_org", "roles": ["kuvert_editor"]},
+            # An app granted only what it reads, for the scope tests (tests/test_scopes.py).
+            "readertest": {"sub": "1", "scope": "openid kuvert_read"},
+        }.items()
     },
 }
 
@@ -62,5 +70,4 @@ _DATALAYER_TEST = {
     "region": "us-east-1",
     "role_arn": "arn:aws:iam::000000000000:role/datalayer",
     "bigfile": {"bucket": "kuvert-mail"},
-    "upload_roles": ["admin", "editor", "bot"],
 }

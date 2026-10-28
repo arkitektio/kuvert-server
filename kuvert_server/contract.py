@@ -7,15 +7,30 @@ the same commit, and no installer has to learn of it.
 
 from __future__ import annotations
 
-from arkitekt_service.contract import JSON, Contract, Description, Descriptor, Facts, Hosts, Job, Needs, Offers, Refused, Scope, Signal, Start, Structure, blocks
+from arkitekt_service.contract import JSON, Contract, Description, Descriptor, Facts, Hosts, Job, Needs, Offers, Refused, Role, Scope, Signal, Start, Structure, blocks
 
 from kuvert_server.configuration import Settings
 
-#: What a token may be allowed to do here: defined at the coordination server when the hub enrols.
+#: What an app may do here on a user's behalf: defined at the coordination server when the hub
+#: enrols. Every root field of the schema asks for one of them (`AuthExtension(scopes=...)`).
 SCOPES = [
-    Scope(key="kuvert_read", description="Read synced mail"),
-    Scope(key="kuvert_write", description="Link mailboxes, organise and send mail"),
+    Scope(key="kuvert_read", description="Read your synced mail, folders, categories and tasks."),
+    Scope(key="kuvert_write", description="Organise mail (flag, move, delete, categorise) and manage tasks and thread links."),
+    Scope(key="kuvert_send", description="Send email from your linked mailboxes."),
+    Scope(key="kuvert_mailboxes", description="Link, test, sync and share mailboxes, including signing in to Gmail or Microsoft."),
+    Scope(key="kuvert_providers", description="Set up the mail providers (IMAP servers, Gmail, Microsoft) that mailboxes connect through."),
+    Scope(key="kuvert_all", description="Do everything in Kuvert on your behalf.", is_all_scope=True),
 ]
+
+#: What a member of an organization may do here.
+ROLES = [
+    Role(key="kuvert_admin", description="Full control of Kuvert in this organization, including mail providers.", is_admin_role=True),
+    Role(key="kuvert_editor", description="Link mailboxes, and organise and send mail.", is_default_role=True),
+]
+
+#: The role every write asks for, and the one that sets up providers.
+EDITOR = "kuvert_editor"
+ADMIN = "kuvert_admin"
 
 #: What exists on a hub because this service is there: said here, as data, so the hub knows it from
 #: the image. ``service.py`` binds each of these to its model and refuses anything not said here.
@@ -108,7 +123,7 @@ contract = Contract(
         name="kuvert",
         identifier="live.arkitekt.kuvert",
         summary="Mail, synced and organised.",
-        needs=Needs(scopes=SCOPES, storage=["bigfile"], instance_key=True, peers=["rekuest"], secrets=["fernet"]),
+        needs=Needs(scopes=SCOPES, roles=ROLES, storage=["bigfile"], instance_key=True, peers=["rekuest"], secrets=["fernet"]),
         offers=Offers(endpoints={"rekuest_service": "_rekuest/service", "rekuest_hook": "_rekuest/hook"}),
         requires={"rekuest": ">=6"},
         hosts=HOSTS,

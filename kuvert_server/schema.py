@@ -1,11 +1,14 @@
 """The GraphQL schema for the kuvert service.
 
-Every field requires an authenticated caller (``AuthExtension``). Every read sees only the
-caller's active organization and, within it, only the mailboxes the caller may see (their own,
-ones shared with them, and organization-wide ones) -- ``OrgScoped`` types and the
-``mail.scoping`` lookups. Only the member who linked a mailbox changes its credentials or
-sharing, or unlinks it. Any member may link a mailbox; only the organization's admins set up the
-providers mailboxes are linked through (``admin_mutation``).
+Every field requires an authenticated caller and asks for one of kuvert's scopes
+(``AuthExtension(scopes=...)``, published as ``@auth(required_scopes: ...)``): reads for
+``kuvert_read``, writes for the scope of their section. Every write also asks for
+``kuvert_editor`` (``kuvert_admin`` holds every role). Every read sees only the caller's active
+organization and, within it, only the mailboxes the caller may see (their own, ones shared with
+them, and organization-wide ones) -- ``OrgScoped`` types and the ``mail.scoping`` lookups. Only
+the member who linked a mailbox changes its credentials or sharing, or unlinks it. Any editor may
+link a mailbox; only kuvert's admins set up the providers mailboxes are linked through
+(``admin_mutation``).
 
 * ``AuthentikateExtension`` — authenticates the request from its bearer token
   and exposes the user/organization/client on ``info.context.request``.
@@ -26,35 +29,38 @@ from arkitekt_datalayer import mutations as datalayer_mutations
 from arkitekt_datalayer import scalars as datalayer_scalars
 from arkitekt_datalayer import types as datalayer_types
 from arkitekt_datalayer.datalayer import load_config
+from arkitekt_service.graphql import annotate_schema
+from kuvert_server.contract import ADMIN, EDITOR
 from kuvert_server.logs import QuietErrorsSchema
+from kuvert_server.service import service as kuvert_service
 from mail import types
 from mail.graphql import mutations, queries, subscriptions
 
 
-def field(**kwargs):  # noqa: ANN201
-    """A query field that requires authentication."""
-    return strawberry_django.field(extensions=[AuthExtension()], **kwargs)
+def field(scope: str = "kuvert_read", **kwargs):  # noqa: ANN201
+    """A query field an app needs ``scope`` for (``kuvert_read``, unless it says otherwise)."""
+    return strawberry_django.field(extensions=[AuthExtension(scopes=[scope])], **kwargs)
 
 
-def mutation(**kwargs):  # noqa: ANN201
-    """A mutation that requires authentication."""
-    return strawberry_django.mutation(extensions=[AuthExtension()], **kwargs)
+def mutation(scope: str = "kuvert_write", **kwargs):  # noqa: ANN201
+    """A write: an app needs ``scope`` for it (``kuvert_write``, unless it says otherwise), a member ``kuvert_editor``."""
+    return strawberry_django.mutation(extensions=[AuthExtension(scopes=[scope], any_role_of=[EDITOR])], **kwargs)
 
 
 def upload_mutation(**kwargs):  # noqa: ANN201
-    """A mutation that hands out (or finishes) upload credentials: gated by ``datalayer.upload_roles``."""
-    roles = load_config().upload_roles
-    return strawberry_django.mutation(extensions=[AuthExtension(any_role_of=roles)], **kwargs)
+    """A mutation that hands out (or finishes) upload credentials: a write, gated by ``datalayer.upload_roles`` (``kuvert_editor`` when none are set)."""
+    roles = load_config().upload_roles or [EDITOR]
+    return strawberry_django.mutation(extensions=[AuthExtension(scopes=["kuvert_write"], any_role_of=roles)], **kwargs)
 
 
 def admin_mutation(**kwargs):  # noqa: ANN201
-    """A mutation only an admin of the request's organization may run (the role is the membership's, not the token's)."""
-    return strawberry_django.mutation(extensions=[AuthExtension(org_roles=["admin"])], **kwargs)
+    """A mutation only kuvert's admins may run: an app needs ``kuvert_providers`` for it."""
+    return strawberry_django.mutation(extensions=[AuthExtension(scopes=["kuvert_providers"], any_role_of=[ADMIN])], **kwargs)
 
 
 def subscription(**kwargs):  # noqa: ANN201
-    """A subscription that requires authentication."""
-    return strawberry.subscription(extensions=[AuthSubscribeExtension()], **kwargs)
+    """A subscription: what it streams is read, so an app needs ``kuvert_read`` for it."""
+    return strawberry.subscription(extensions=[AuthSubscribeExtension(scopes=["kuvert_read"])], **kwargs)
 
 
 @strawberry.type
@@ -100,18 +106,18 @@ class Mutation:
     update_provider = admin_mutation(resolver=mutations.update_provider, description="Admins: rename, enable or disable any provider, or change its capabilities.")
     delete_provider = admin_mutation(resolver=mutations.delete_provider, description="Admins: remove a provider no mailbox goes through.")
     # Mailboxes
-    create_mail_account = mutation(resolver=mutations.create_mail_account, description="Link a mailbox with a username and (app) password through an IMAP provider; the login is tested first.")
-    update_mail_account = mutation(resolver=mutations.update_mail_account, description="Change a mailbox (owner only); new servers or credentials are tested first.")
-    test_mail_account = mutation(resolver=mutations.test_mail_account, description="Log in to a mailbox's servers now.")
-    delete_mail_account = mutation(resolver=mutations.delete_mail_account, description="Unlink a mailbox (owner only). Mail on the server is untouched.")
-    share_mail_account = mutation(resolver=mutations.share_mail_account, description="Set who sees a mailbox (owner only).")
-    update_mail_folder = mutation(resolver=mutations.update_mail_folder, description="Turn syncing a folder on or off.")
-    sync_mail_account = mutation(resolver=mutations.sync_mail_account, description="Sync a mailbox now.")
+    create_mail_account = mutation(scope="kuvert_mailboxes", resolver=mutations.create_mail_account, description="Link a mailbox with a username and (app) password through an IMAP provider; the login is tested first.")
+    update_mail_account = mutation(scope="kuvert_mailboxes", resolver=mutations.update_mail_account, description="Change a mailbox (owner only); new servers or credentials are tested first.")
+    test_mail_account = mutation(scope="kuvert_mailboxes", resolver=mutations.test_mail_account, description="Log in to a mailbox's servers now.")
+    delete_mail_account = mutation(scope="kuvert_mailboxes", resolver=mutations.delete_mail_account, description="Unlink a mailbox (owner only). Mail on the server is untouched.")
+    share_mail_account = mutation(scope="kuvert_mailboxes", resolver=mutations.share_mail_account, description="Set who sees a mailbox (owner only).")
+    update_mail_folder = mutation(scope="kuvert_mailboxes", resolver=mutations.update_mail_folder, description="Turn syncing a folder on or off.")
+    sync_mail_account = mutation(scope="kuvert_mailboxes", resolver=mutations.sync_mail_account, description="Sync a mailbox now.")
     # OAuth (Gmail, Microsoft)
-    start_oauth_link = mutation(resolver=mutations.start_oauth_link, name="startOAuthLink", description="Start linking (or re-linking) a mailbox through a Gmail or Microsoft provider.")
-    complete_auth = mutation(resolver=mutations.complete_auth, description="REDIRECT: finish with the code. POLL: advance one step; call until not PENDING.")
-    resume_auth = mutation(resolver=mutations.resume_auth, description="The same login again (a fresh openUrl if the old one cannot be reused).")
-    cancel_auth = mutation(resolver=mutations.cancel_auth, description="Drop a login that will not be finished. Idempotent.")
+    start_oauth_link = mutation(scope="kuvert_mailboxes", resolver=mutations.start_oauth_link, name="startOAuthLink", description="Start linking (or re-linking) a mailbox through a Gmail or Microsoft provider.")
+    complete_auth = mutation(scope="kuvert_mailboxes", resolver=mutations.complete_auth, description="REDIRECT: finish with the code. POLL: advance one step; call until not PENDING.")
+    resume_auth = mutation(scope="kuvert_mailboxes", resolver=mutations.resume_auth, description="The same login again (a fresh openUrl if the old one cannot be reused).")
+    cancel_auth = mutation(scope="kuvert_mailboxes", resolver=mutations.cancel_auth, description="Drop a login that will not be finished. Idempotent.")
     # Messages
     set_message_flags = mutation(resolver=mutations.set_message_flags, description="Add and remove flags of messages.")
     mark_messages_read = mutation(resolver=mutations.mark_messages_read, description="Mark messages read or unread.")
@@ -139,7 +145,7 @@ class Mutation:
     link_threads = mutation(resolver=mutations.link_threads, description="Put conversations into a task.")
     unlink_threads = mutation(resolver=mutations.unlink_threads, description="Take conversations out of a task.")
     # Sending
-    send_message = mutation(resolver=mutations.send_message, description="Send a message through a mailbox's SMTP server.")
+    send_message = mutation(scope="kuvert_send", resolver=mutations.send_message, description="Send a message through a mailbox's SMTP server.")
     # Uploads for attachments (the datalayer): request a grant, write the file to S3, finish, then attach it.
     request_bigfile_upload = upload_mutation(resolver=datalayer_mutations.request_bigfile_upload, description="Request temporary S3 credentials to upload one file (an attachment to send).")
     finish_bigfile_upload = upload_mutation(resolver=mutations.finish_bigfile_upload, description="Finalize the caller's file upload after the client has written the object.")
@@ -174,3 +180,4 @@ schema = Schema(
         KoherentExtension,
     ],
 )
+annotate_schema(schema, kuvert_service)

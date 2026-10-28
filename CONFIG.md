@@ -247,7 +247,7 @@ A sync writes each message's raw ``.eml`` and its attachments with the service's
 | `region` | `DATALAYER__REGION` | str | `"us-east-1"` | S3 region name. |
 | `role_arn` | `DATALAYER__ROLE_ARN` | Optional[str] | `None` | The role upload grants assume. RustFS/MinIO ignore its value and scope the session by the inline policy alone, but STS needs one. |
 | `session_duration_seconds` | `DATALAYER__SESSION_DURATION_SECONDS` | int | `3600` | How long an upload or read grant lasts (clamped to 900–43200). |
-| `upload_roles` | `DATALAYER__UPLOAD_ROLES` | List[str] | `['admin', 'editor', 'bot']` | Organization roles allowed to request upload grants. Holding any one of them is enough. |
+| `upload_roles` | `DATALAYER__UPLOAD_ROLES` | List[str] | `[]` | kuvert's roles allowed to request upload grants; any one of them is enough. Empty: `kuvert_editor`. |
 
 ### `datalayer.bigfile` — A single S3 bucket binding within the datalayer.
 
