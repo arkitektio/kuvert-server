@@ -29,7 +29,7 @@ from arkitekt_datalayer import mutations as datalayer_mutations
 from arkitekt_datalayer import scalars as datalayer_scalars
 from arkitekt_datalayer import types as datalayer_types
 from arkitekt_datalayer.datalayer import load_config
-from arkitekt_service.graphql import annotate_schema
+from arkitekt_service.graphql import TelemetryExtension, annotate_schema
 from kuvert_server.contract import ADMIN, EDITOR
 from kuvert_server.logs import QuietErrorsSchema
 from kuvert_server.service import service as kuvert_service
@@ -175,6 +175,7 @@ schema = Schema(
     types=[datalayer_types.BigFileStore],
     config=StrawberryConfig(scalar_map={**datalayer_scalars.SCALAR_MAP}),
     extensions=[
+        TelemetryExtension,
         DjangoOptimizerExtension,
         AuthentikateExtension,
         KoherentExtension,
