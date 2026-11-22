@@ -7,25 +7,66 @@ the same commit, and no installer has to learn of it.
 
 from __future__ import annotations
 
-from arkitekt_service.contract import JSON, Contract, Description, Descriptor, Facts, Hosts, Job, Needs, Offers, Refused, Role, Scope, Signal, Start, Structure, blocks
+from arkitekt_service.contract import (
+    JSON,
+    Contract,
+    Description,
+    Descriptor,
+    Facts,
+    Hosts,
+    Job,
+    Needs,
+    Offers,
+    Refused,
+    Role,
+    Scope,
+    Signal,
+    Start,
+    Structure,
+    blocks,
+)
 
 from kuvert_server.configuration import Settings
 
 #: What an app may do here on a user's behalf: defined at the coordination server when the hub
 #: enrols. Every root field of the schema asks for one of them (`AuthExtension(scopes=...)`).
 SCOPES = [
-    Scope(key="kuvert_read", description="Read your synced mail, folders, categories and tasks."),
-    Scope(key="kuvert_write", description="Organise mail (flag, move, delete, categorise) and manage tasks and thread links."),
+    Scope(
+        key="kuvert_read",
+        description="Read your synced mail, folders, categories and tasks.",
+    ),
+    Scope(
+        key="kuvert_write",
+        description="Organise mail (flag, move, delete, categorise) and manage tasks and thread links.",
+    ),
     Scope(key="kuvert_send", description="Send email from your linked mailboxes."),
-    Scope(key="kuvert_mailboxes", description="Link, test, sync and share mailboxes, including signing in to Gmail or Microsoft."),
-    Scope(key="kuvert_providers", description="Set up the mail providers (IMAP servers, Gmail, Microsoft) that mailboxes connect through."),
-    Scope(key="kuvert_all", description="Do everything in Kuvert on your behalf.", is_all_scope=True),
+    Scope(
+        key="kuvert_mailboxes",
+        description="Link, test, sync and share mailboxes, including signing in to Gmail or Microsoft.",
+    ),
+    Scope(
+        key="kuvert_providers",
+        description="Set up the mail providers (IMAP servers, Gmail, Microsoft) that mailboxes connect through.",
+    ),
+    Scope(
+        key="kuvert_all",
+        description="Do everything in Kuvert on your behalf.",
+        is_all_scope=True,
+    ),
 ]
 
 #: What a member of an organization may do here.
 ROLES = [
-    Role(key="kuvert_admin", description="Full control of Kuvert in this organization, including mail providers.", is_admin_role=True),
-    Role(key="kuvert_editor", description="Link mailboxes, and organise and send mail.", is_default_role=True),
+    Role(
+        key="kuvert_admin",
+        description="Full control of Kuvert in this organization, including mail providers.",
+        is_admin_role=True,
+    ),
+    Role(
+        key="kuvert_editor",
+        description="Link mailboxes, and organise and send mail.",
+        is_default_role=True,
+    ),
 ]
 
 #: The role every write asks for, and the one that sets up providers.
@@ -35,9 +76,21 @@ ADMIN = "kuvert_admin"
 #: What exists on a hub because this service is there: said here, as data, so the hub knows it from
 #: the image. ``service.py`` binds each of these to its model and refuses anything not said here.
 PROVIDER_DESCRIPTORS = [
-    Descriptor(key="@kuvert/provider_kind", type="STRING", description="The kind of provider: GENERIC (an IMAP or POP3 mail server), GMAIL (Gmail, Google Workspace) or MICROSOFT (Outlook.com, Microsoft 365)"),
-    Descriptor(key="@kuvert/enabled", type="BOOL", description="Whether it is switched on: it links mailboxes, and they sync and send mail"),
-    Descriptor(key="@kuvert/capabilities", type="LIST", description="What is switched on beyond reading mail: SEND (sending email) and SCHEDULED_SYNC"),
+    Descriptor(
+        key="@kuvert/provider_kind",
+        type="STRING",
+        description="The kind of provider: GENERIC (an IMAP or POP3 mail server), GMAIL (Gmail, Google Workspace) or MICROSOFT (Outlook.com, Microsoft 365)",
+    ),
+    Descriptor(
+        key="@kuvert/enabled",
+        type="BOOL",
+        description="Whether it is switched on: it links mailboxes, and they sync and send mail",
+    ),
+    Descriptor(
+        key="@kuvert/capabilities",
+        type="LIST",
+        description="What is switched on beyond reading mail: SEND (sending email) and SCHEDULED_SYNC",
+    ),
 ]
 
 HOSTS = Hosts(
@@ -53,7 +106,11 @@ HOSTS = Hosts(
             label="Email Message",
             description="An email (e-mail message) in one folder of a mailbox, such as the inbox, with its sender, recipients, subject, body and attachments.",
             descriptors=[
-                Descriptor(key="@kuvert/has_attachments", type="BOOL", description="Whether the email has attachments (attached files), not counting inline images"),
+                Descriptor(
+                    key="@kuvert/has_attachments",
+                    type="BOOL",
+                    description="Whether the email has attachments (attached files), not counting inline images",
+                ),
             ],
         ),
         Structure(
@@ -61,7 +118,11 @@ HOSTS = Hosts(
             label="Email Thread",
             description="A conversation: the emails of a mailbox that answer one another (replies and forwards), across its folders.",
             descriptors=[
-                Descriptor(key="@kuvert/message_count", type="INT", description="How many emails the conversation holds"),
+                Descriptor(
+                    key="@kuvert/message_count",
+                    type="INT",
+                    description="How many emails the conversation holds",
+                ),
             ],
         ),
         Structure(
@@ -69,7 +130,11 @@ HOSTS = Hosts(
             label="Outgoing Email",
             description="An email sent from a mailbox through its SMTP server: what was asked to be sent, and what happened.",
             descriptors=[
-                Descriptor(key="@kuvert/status", type="STRING", description="Where the outgoing email is: SENDING, SENT or FAILED"),
+                Descriptor(
+                    key="@kuvert/status",
+                    type="STRING",
+                    description="Where the outgoing email is: SENDING, SENT or FAILED",
+                ),
             ],
         ),
     ],
@@ -107,7 +172,9 @@ def render(facts: Facts) -> dict[str, JSON]:
     document: dict[str, JSON] = blocks.server(facts)
     key = facts.secrets.get("fernet")
     if key is None:
-        raise Refused("it needs a Fernet key file mounted: stored mailbox credentials are encrypted with it")
+        raise Refused(
+            "it needs a Fernet key file mounted: stored mailbox credentials are encrypted with it"
+        )
     document["secrets"] = {"key_path": key}
     if facts.storage is not None:
         document["datalayer"] = blocks.datalayer(facts)
@@ -123,8 +190,20 @@ contract = Contract(
         name="kuvert",
         identifier="live.arkitekt.kuvert",
         summary="Mail, synced and organised.",
-        needs=Needs(scopes=SCOPES, roles=ROLES, storage=["bigfile"], instance_key=True, peers=["rekuest"], secrets=["fernet"]),
-        offers=Offers(endpoints={"rekuest_service": "_rekuest/service", "rekuest_hook": "_rekuest/hook"}),
+        needs=Needs(
+            scopes=SCOPES,
+            roles=ROLES,
+            storage=["bigfile"],
+            instance_key=True,
+            peers=["rekuest"],
+            secrets=["fernet"],
+        ),
+        offers=Offers(
+            endpoints={
+                "rekuest_service": "_rekuest/service",
+                "rekuest_hook": "_rekuest/hook",
+            }
+        ),
         requires={"rekuest": ">=6"},
         hosts=HOSTS,
     ),
@@ -132,12 +211,31 @@ contract = Contract(
     render=render,
     # How this service is started: there is no script beside it. `arkitekt-service serve`
     # (and `debug`) become these, so they get the container's signals themselves.
-    serve=Start(("daphne", "-b", "0.0.0.0", "-p", "80", "--websocket_timeout", "-1", "kuvert_server.asgi:application")),
+    serve=Start(
+        (
+            "daphne",
+            "-b",
+            "0.0.0.0",
+            "-p",
+            "80",
+            "--websocket_timeout",
+            "-1",
+            "kuvert_server.asgi:application",
+        )
+    ),
     debug=Start(("python", "manage.py", "runserver", "0.0.0.0:80")),
     jobs={
-        "ensureadmin": Job(("ensureadmin",), "Create the operator account the config names"),
-        "rotate_secrets": Job(("rotate_secrets",), "Re-encrypt every stored mailbox and provider credential with the first key of the key file"),
-        "restore_descriptors": Job(("restore_descriptors",), "Store the descriptors of every provider, message, conversation and sent mail that misses one (--all: of every row)"),
+        "ensureadmin": Job(
+            ("ensureadmin",), "Create the operator account the config names"
+        ),
+        "rotate_secrets": Job(
+            ("rotate_secrets",),
+            "Re-encrypt every stored mailbox and provider credential with the first key of the key file",
+        ),
+        "restore_descriptors": Job(
+            ("restore_descriptors",),
+            "Store the descriptors of every provider, message, conversation and sent mail that misses one (--all: of every row)",
+        ),
     },
     setup=("ensureadmin", "restore_descriptors"),
 )

@@ -31,7 +31,9 @@ UNSCOPED_MODELS: frozenset[str] = frozenset()
 _MAX_PATH_DEPTH = 3
 
 
-def _find_path(model: type[django_models.Model], depth: int, target: str, is_target) -> str | None:  # noqa: ANN001
+def _find_path(
+    model: type[django_models.Model], depth: int, target: str, is_target
+) -> str | None:  # noqa: ANN001
     if is_target(model):
         return ""
     try:
@@ -84,17 +86,24 @@ def visible_accounts_q(user, prefix: str = "") -> Q:  # noqa: ANN001 - authentik
     return (
         Q(**{f"{prefix}creator": user})
         | Q(**{f"{prefix}visibility": Visibility.ORGANIZATION})
-        | (Q(**{f"{prefix}visibility": Visibility.SHARED}) & Q(**{f"{prefix}shared_with": user}))
+        | (
+            Q(**{f"{prefix}visibility": Visibility.SHARED})
+            & Q(**{f"{prefix}shared_with": user})
+        )
     )
 
 
-def scope_to(queryset: django_models.QuerySet, organization, user) -> django_models.QuerySet:  # noqa: ANN001
+def scope_to(
+    queryset: django_models.QuerySet, organization, user
+) -> django_models.QuerySet:  # noqa: ANN001
     """Narrow ``queryset`` to ``organization`` and to the mailboxes ``user`` may see."""
     model = queryset.model
     path = organization_path(model)
     if path is None:
         if model.__name__ not in UNSCOPED_MODELS:
-            raise LookupError(f"{model.__name__} has no path to an organization and is not registered in mail.scoping.UNSCOPED_MODELS")
+            raise LookupError(
+                f"{model.__name__} has no path to an organization and is not registered in mail.scoping.UNSCOPED_MODELS"
+            )
         return queryset
     queryset = queryset.filter(**{path: organization})
     to_account = account_path(model)
@@ -104,14 +113,18 @@ def scope_to(queryset: django_models.QuerySet, organization, user) -> django_mod
         # `shared_with` is a to-many join: select the visible ids in a subquery, so a row is
         # never duplicated when several conditions hold.
         visible = MailAccount.objects.filter(visible_accounts_q(user)).values("id")
-        queryset = queryset.filter(**{f"{to_account}__in" if to_account else "id__in": visible})
+        queryset = queryset.filter(
+            **{f"{to_account}__in" if to_account else "id__in": visible}
+        )
     to_owner = owner_path(model)
     if to_owner is not None:
         queryset = queryset.filter(**{to_owner: user})
     return queryset
 
 
-def scope_queryset(queryset: django_models.QuerySet, info: Info) -> django_models.QuerySet:
+def scope_queryset(
+    queryset: django_models.QuerySet, info: Info
+) -> django_models.QuerySet:
     """Narrow ``queryset`` to what the request's user may see in its organization."""
     request = info.context.request
     return scope_to(queryset, request.organization, request.user)
@@ -122,11 +135,15 @@ def for_org(model: type[django_models.Model], info: Info) -> django_models.Query
     return scope_queryset(model.objects.all(), info)
 
 
-def get_for_org(model: type[django_models.Model], info: Info, **kwargs) -> django_models.Model:
+def get_for_org(
+    model: type[django_models.Model], info: Info, **kwargs
+) -> django_models.Model:
     """``Model.objects.get`` limited to what the request may see."""
     return for_org(model, info).get(**kwargs)
 
 
-async def aget_for_org(model: type[django_models.Model], info: Info, **kwargs) -> django_models.Model:
+async def aget_for_org(
+    model: type[django_models.Model], info: Info, **kwargs
+) -> django_models.Model:
     """Async ``Model.objects.aget`` limited to what the request may see."""
     return await for_org(model, info).aget(**kwargs)

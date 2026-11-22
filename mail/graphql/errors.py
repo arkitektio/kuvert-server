@@ -19,7 +19,11 @@ def translate(error: Exception) -> Exception:
     code = code_for(error)
     if code is None:
         return error
-    extensions = {"nextSyncAllowedAt": error.allowed_at.isoformat()} if isinstance(error, SyncTooSoon) else None
+    extensions = (
+        {"nextSyncAllowedAt": error.allowed_at.isoformat()}
+        if isinstance(error, SyncTooSoon)
+        else None
+    )
     return KanteError(str(error), code=str(code.value), extensions=extensions)
 
 

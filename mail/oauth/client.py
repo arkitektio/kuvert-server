@@ -115,7 +115,10 @@ def client_for(row: models.MailProvider) -> OAuthClient:
     """The OAuth client of a Gmail or Microsoft provider row."""
     defaults = DEFAULTS.get(row.kind)
     if defaults is None:
-        raise MailError(f"{row.kind} mailboxes are not linked with OAuth.", MailErrorCode.INVALID_STATE)
+        raise MailError(
+            f"{row.kind} mailboxes are not linked with OAuth.",
+            MailErrorCode.INVALID_STATE,
+        )
     values = providers.oauth_settings(row)
     conf = (settings.KUVERT_OAUTH or {}).get(defaults.config_key) or {}
     return OAuthClient(
@@ -123,13 +126,23 @@ def client_for(row: models.MailProvider) -> OAuthClient:
         client_id=values.client_id,
         client_secret=crypto.decrypt_optional(row.secret),
         redirect_urls=tuple(values.redirect_urls),
-        authorize_url=conf.get("authorize_url") or defaults.authorize_url.format(tenant=values.tenant),
-        token_url=conf.get("token_url") or defaults.token_url.format(tenant=values.tenant),
+        authorize_url=conf.get("authorize_url")
+        or defaults.authorize_url.format(tenant=values.tenant),
+        token_url=conf.get("token_url")
+        or defaults.token_url.format(tenant=values.tenant),
         userinfo_url=conf.get("userinfo_url"),
         scopes=tuple(conf.get("scopes") or defaults.scopes),
-        imap=(conf.get("imap_host") or defaults.imap[0], conf.get("imap_port") or defaults.imap[1], defaults.imap[2]),
+        imap=(
+            conf.get("imap_host") or defaults.imap[0],
+            conf.get("imap_port") or defaults.imap[1],
+            defaults.imap[2],
+        ),
         pop3=defaults.pop3,
-        smtp=(conf.get("smtp_host") or defaults.smtp[0], conf.get("smtp_port") or defaults.smtp[1], defaults.smtp[2]),
+        smtp=(
+            conf.get("smtp_host") or defaults.smtp[0],
+            conf.get("smtp_port") or defaults.smtp[1],
+            defaults.smtp[2],
+        ),
         extra_params=defaults.extra_params,
         timeout=float(conf.get("timeout_seconds") or 20),
     )
@@ -138,11 +151,21 @@ def client_for(row: models.MailProvider) -> OAuthClient:
 def pkce_pair() -> tuple[str, str]:
     """A PKCE (verifier, S256 challenge)."""
     verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
     return verifier, challenge
 
 
-def authorize_url(client: OAuthClient, state: str, challenge: str, redirect_url: str, login_hint: str | None = None) -> str:
+def authorize_url(
+    client: OAuthClient,
+    state: str,
+    challenge: str,
+    redirect_url: str,
+    login_hint: str | None = None,
+) -> str:
     """Where the user approves access."""
     params = {
         "response_type": "code",
@@ -166,7 +189,10 @@ def _post(client: OAuthClient, form: dict[str, str]) -> dict:
     request = urllib.request.Request(
         client.token_url,
         data=urllib.parse.urlencode({"client_id": client.client_id, **form}).encode(),
-        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
         method="POST",
     )
     try:
@@ -180,28 +206,66 @@ def _post(client: OAuthClient, form: dict[str, str]) -> dict:
         kind = body.get("error") or f"HTTP {error.code}"
         description = body.get("error_description") or ""
         if kind == "invalid_grant":
-            raise TokenRevoked(f"The provider refused the grant: {description or kind}") from error
-        failure = ProviderUnreachable if error.code >= 500 or error.code == 429 else MailError  # no answer about the request itself
-        raise failure(f"The OAuth provider answered {kind}: {description}".strip(": "), MailErrorCode.PROVIDER_ERROR) from error
+            raise TokenRevoked(
+                f"The provider refused the grant: {description or kind}"
+            ) from error
+        failure = (
+            ProviderUnreachable if error.code >= 500 or error.code == 429 else MailError
+        )  # no answer about the request itself
+        raise failure(
+            f"The OAuth provider answered {kind}: {description}".strip(": "),
+            MailErrorCode.PROVIDER_ERROR,
+        ) from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise ProviderUnreachable(f"The OAuth provider could not be reached: {error}", MailErrorCode.PROVIDER_ERROR) from error
+        raise ProviderUnreachable(
+            f"The OAuth provider could not be reached: {error}",
+            MailErrorCode.PROVIDER_ERROR,
+        ) from error
 
 
 def _tokens(body: dict) -> TokenSet:
     if not body.get("access_token"):
-        raise MailError("The OAuth provider returned no access token.", MailErrorCode.PROVIDER_ERROR)
+        raise MailError(
+            "The OAuth provider returned no access token.", MailErrorCode.PROVIDER_ERROR
+        )
     expires = body.get("expires_in")
-    return TokenSet(body["access_token"], body.get("refresh_token"), int(expires) if expires is not None else None, body.get("id_token"))
+    return TokenSet(
+        body["access_token"],
+        body.get("refresh_token"),
+        int(expires) if expires is not None else None,
+        body.get("id_token"),
+    )
 
 
-def exchange_code(client: OAuthClient, code: str, verifier: str, redirect_url: str) -> TokenSet:
+def exchange_code(
+    client: OAuthClient, code: str, verifier: str, redirect_url: str
+) -> TokenSet:
     """Tokens for an approved authorization code."""
-    return _tokens(_post(client, {"grant_type": "authorization_code", "code": code, "code_verifier": verifier, "redirect_uri": redirect_url}))
+    return _tokens(
+        _post(
+            client,
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": verifier,
+                "redirect_uri": redirect_url,
+            },
+        )
+    )
 
 
 def refresh(client: OAuthClient, refresh_token: str) -> TokenSet:
     """A new access token (and, for providers that rotate them, a new refresh token)."""
-    return _tokens(_post(client, {"grant_type": "refresh_token", "refresh_token": refresh_token, "scope": " ".join(client.scopes)}))
+    return _tokens(
+        _post(
+            client,
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "scope": " ".join(client.scopes),
+            },
+        )
+    )
 
 
 def _claims(id_token: str) -> dict:
@@ -221,13 +285,27 @@ def mailbox_address(client: OAuthClient, tokens: TokenSet) -> tuple[str, str]:
     """The (address, display name) the tokens belong to."""
     claims = _claims(tokens.id_token) if tokens.id_token else {}
     if not claims.get("email") and client.userinfo_url:
-        request = urllib.request.Request(client.userinfo_url, headers={"Authorization": f"Bearer {tokens.access_token}", "Accept": "application/json"})
+        request = urllib.request.Request(
+            client.userinfo_url,
+            headers={
+                "Authorization": f"Bearer {tokens.access_token}",
+                "Accept": "application/json",
+            },
+        )
         try:
             with urllib.request.urlopen(request, timeout=client.timeout) as response:
                 claims = {**claims, **json.loads(response.read())}
         except (urllib.error.URLError, ValueError, OSError) as error:
-            raise MailError(f"Could not read the mailbox address: {error}", MailErrorCode.PROVIDER_ERROR) from error
-    address = claims.get("email") or claims.get("preferred_username") or claims.get("upn")
+            raise MailError(
+                f"Could not read the mailbox address: {error}",
+                MailErrorCode.PROVIDER_ERROR,
+            ) from error
+    address = (
+        claims.get("email") or claims.get("preferred_username") or claims.get("upn")
+    )
     if not address or "@" not in address:
-        raise MailError("The provider did not say which mailbox was approved (no email claim).", MailErrorCode.PROVIDER_ERROR)
+        raise MailError(
+            "The provider did not say which mailbox was approved (no email claim).",
+            MailErrorCode.PROVIDER_ERROR,
+        )
     return address.lower(), claims.get("name") or ""

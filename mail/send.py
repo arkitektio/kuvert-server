@@ -16,7 +16,7 @@ import logging
 import mimetypes
 from email.headerregistry import Address
 from email.message import EmailMessage
-from email.utils import formataddr, format_datetime, make_msgid
+from email.utils import format_datetime, formataddr, make_msgid
 
 from django.conf import settings
 from django.utils import timezone
@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 def _header_list(recipients: list[dict]) -> str:
-    return ", ".join(formataddr((r.get("name") or "", r["address"])) for r in recipients)
+    return ", ".join(
+        formataddr((r.get("name") or "", r["address"])) for r in recipients
+    )
 
 
 def _domain(address: str) -> str:
@@ -60,9 +62,18 @@ def build(outgoing: models.OutgoingMessage) -> EmailMessage:
         msg.add_alternative(outgoing.html_body, subtype="html")
     for store in outgoing.attachments.all():
         payload = storage.read_bytes(store)
-        kind = store.content_type or mimetypes.guess_type(store.original_file_name or "")[0] or "application/octet-stream"
+        kind = (
+            store.content_type
+            or mimetypes.guess_type(store.original_file_name or "")[0]
+            or "application/octet-stream"
+        )
         maintype, _, subtype = kind.partition("/")
-        msg.add_attachment(payload, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=store.get_upload_file_name())
+        msg.add_attachment(
+            payload,
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
+            filename=store.get_upload_file_name(),
+        )
     return msg
 
 
@@ -73,14 +84,18 @@ def new_message_id(account: models.MailAccount) -> str:
 
 def _save_copy(account: models.MailAccount, raw: bytes) -> bool:
     """Append ``raw`` to the Sent folder and read it in; False when there is none (or it failed)."""
-    sent = models.MailFolder.objects.filter(account=account, role=models.FolderRole.SENT, exists_on_server=True).first()
+    sent = models.MailFolder.objects.filter(
+        account=account, role=models.FolderRole.SENT, exists_on_server=True
+    ).first()
     if sent is None:
         return False
     with sync.incoming_session(account) as client:
         client.append(sent.path, raw, flags=["\\Seen"])
         if sync.claim(account.id):
             try:
-                imap_sync.sync_folder(client, account, sent, imap_sync.ImapResult(), condstore=False)
+                imap_sync.sync_folder(
+                    client, account, sent, imap_sync.ImapResult(), condstore=False
+                )
             finally:
                 sync.release(account.id)
     return True
@@ -94,11 +109,22 @@ def send(outgoing: models.OutgoingMessage) -> models.OutgoingMessage:
         msg = build(outgoing)
         raw = msg.as_bytes()
         if len(raw) > int(settings.KUVERT_MAIL["max_send_bytes"]):
-            raise MailError(f"The message is {len(raw)} bytes, more than the {settings.KUVERT_MAIL['max_send_bytes']} allowed.", models.MailErrorCode.SEND_REJECTED)
-        envelope_to = [r["address"] for r in [*outgoing.to, *outgoing.cc, *outgoing.bcc]]
-        client = open_smtp(accounts.smtp_endpoint(account), accounts.smtp_credentials(account), local_hostname=_domain(account.email_address))
+            raise MailError(
+                f"The message is {len(raw)} bytes, more than the {settings.KUVERT_MAIL['max_send_bytes']} allowed.",
+                models.MailErrorCode.SEND_REJECTED,
+            )
+        envelope_to = [
+            r["address"] for r in [*outgoing.to, *outgoing.cc, *outgoing.bcc]
+        ]
+        client = open_smtp(
+            accounts.smtp_endpoint(account),
+            accounts.smtp_credentials(account),
+            local_hostname=_domain(account.email_address),
+        )
         try:
-            refused = client.send_message(msg, from_addr=account.email_address, to_addrs=envelope_to)
+            refused = client.send_message(
+                msg, from_addr=account.email_address, to_addrs=envelope_to
+            )
         finally:
             try:
                 client.quit()
@@ -108,14 +134,31 @@ def send(outgoing: models.OutgoingMessage) -> models.OutgoingMessage:
         code = code_for(error)
         if code is None:
             raise
-        outgoing.status, outgoing.error, outgoing.error_code = models.OutgoingStatus.FAILED, str(error)[:2000], code
+        outgoing.status, outgoing.error, outgoing.error_code = (
+            models.OutgoingStatus.FAILED,
+            str(error)[:2000],
+            code,
+        )
         outgoing.save(update_fields=["status", "error", "error_code"])
-        if code in (models.MailErrorCode.AUTH_FAILED, models.MailErrorCode.CONSENT_EXPIRED):
-            models.MailAccount.objects.filter(pk=account.pk).update(status=models.MailAccountStatus.NEEDS_REAUTH, last_error=str(error)[:2000], last_error_code=code)
+        if code in (
+            models.MailErrorCode.AUTH_FAILED,
+            models.MailErrorCode.CONSENT_EXPIRED,
+        ):
+            models.MailAccount.objects.filter(pk=account.pk).update(
+                status=models.MailAccountStatus.NEEDS_REAUTH,
+                last_error=str(error)[:2000],
+                last_error_code=code,
+            )
         return outgoing
 
     outgoing.status, outgoing.sent_at = models.OutgoingStatus.SENT, timezone.now()
-    outgoing.refused = {address: [status, text.decode(errors="replace") if isinstance(text, bytes) else str(text)] for address, (status, text) in (refused or {}).items()}
+    outgoing.refused = {
+        address: [
+            status,
+            text.decode(errors="replace") if isinstance(text, bytes) else str(text),
+        ]
+        for address, (status, text) in (refused or {}).items()
+    }
     outgoing.save(update_fields=["status", "sent_at", "refused"])
 
     if account.protocol == models.Protocol.IMAP and account.save_sent_copy:
@@ -123,7 +166,11 @@ def send(outgoing: models.OutgoingMessage) -> models.OutgoingMessage:
             outgoing.saved_to_sent = _save_copy(account, raw)
             outgoing.save(update_fields=["saved_to_sent"])
         except Exception:
-            logger.warning("Sent message %s, but could not save a copy to Sent.", outgoing.pk, exc_info=True)
+            logger.warning(
+                "Sent message %s, but could not save a copy to Sent.",
+                outgoing.pk,
+                exc_info=True,
+            )
     parent = outgoing.in_reply_to
     if parent is not None and "\\Answered" not in parent.flags:
         try:
@@ -131,25 +178,52 @@ def send(outgoing: models.OutgoingMessage) -> models.OutgoingMessage:
             if settings.KUVERT_WRITEBACK.get("push_inline", True):
                 sync.push_now(account.id)
         except Exception:
-            logger.warning("Sent reply %s, but could not flag %s as answered.", outgoing.pk, parent.pk, exc_info=True)
+            logger.warning(
+                "Sent reply %s, but could not flag %s as answered.",
+                outgoing.pk,
+                parent.pk,
+                exc_info=True,
+            )
     return outgoing
 
 
-def prepare(account: models.MailAccount, creator, *, to: list[dict], cc: list[dict], bcc: list[dict], subject: str, text: str, html: str, in_reply_to: models.Message | None, attachments: list) -> models.OutgoingMessage:  # noqa: ANN001
+def prepare(
+    account: models.MailAccount,
+    creator,
+    *,
+    to: list[dict],
+    cc: list[dict],
+    bcc: list[dict],
+    subject: str,
+    text: str,
+    html: str,
+    in_reply_to: models.Message | None,
+    attachments: list,
+) -> models.OutgoingMessage:  # noqa: ANN001
     """Validate and record a message to send (status SENDING); NOT_CONFIGURED when the mailbox's provider does not send."""
     providers.require(account.mail_provider, models.ProviderCapability.SEND)
     recipients = [*to, *cc, *bcc]
     if not recipients:
-        raise MailError("A message needs at least one recipient.", models.MailErrorCode.SEND_REJECTED)
+        raise MailError(
+            "A message needs at least one recipient.",
+            models.MailErrorCode.SEND_REJECTED,
+        )
     for recipient in recipients:
         try:
             Address(addr_spec=recipient["address"])
         except Exception as error:
-            raise MailError(f"{recipient['address']!r} is not an email address.", models.MailErrorCode.SEND_REJECTED) from error
+            raise MailError(
+                f"{recipient['address']!r} is not an email address.",
+                models.MailErrorCode.SEND_REJECTED,
+            ) from error
     if attachments and not storage.enabled():
         raise not_configured("File storage (the datalayer)")
     if in_reply_to is not None and not subject:
-        subject = in_reply_to.subject if in_reply_to.subject.lower().startswith("re:") else f"Re: {in_reply_to.subject}"
+        subject = (
+            in_reply_to.subject
+            if in_reply_to.subject.lower().startswith("re:")
+            else f"Re: {in_reply_to.subject}"
+        )
     outgoing = models.OutgoingMessage.objects.create(
         account=account,
         creator=creator,

@@ -21,13 +21,12 @@ run is one pass, started by rekuest, and a run lost to a crash is simply followe
 import logging
 
 from asgiref.sync import sync_to_async
-from django.conf import settings
 from django.utils import timezone
 
+from kuvert_server.hook_agent import agent
 from mail import models
 from mail.errors import AlreadySyncing, SyncTooSoon
 from mail.sync import push_account, sync_account
-from kuvert_server.hook_agent import agent
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,9 @@ def _active_accounts(organization: str) -> list[int]:
         organization__identifier=organization,
         status=models.MailAccountStatus.ACTIVE,
         mail_provider__enabled=True,
-        mail_provider__capabilities__contains=[models.ProviderCapability.SCHEDULED_SYNC.value],
+        mail_provider__capabilities__contains=[
+            models.ProviderCapability.SCHEDULED_SYNC.value
+        ],
     )
     return list(rows.order_by("last_synced_at", "id").values_list("id", flat=True))
 
@@ -56,14 +57,22 @@ async def sync_all_mailboxes(organization: str) -> dict:
             created += result.created
         except (AlreadySyncing, SyncTooSoon):
             skipped += 1
-        except Exception as error:  # recorded on the mailbox by sync_account; one line here
+        except (
+            Exception
+        ) as error:  # recorded on the mailbox by sync_account; one line here
             failed += 1
             logger.warning("Scheduled sync of mailbox %s failed: %s", account_id, error)
     return {"synced": synced, "skipped": skipped, "failed": failed, "created": created}
 
 
 def _due_accounts(organization: str) -> list[int]:
-    due = models.MailChange.objects.filter(account__organization__identifier=organization, state=models.MailChangeState.PENDING, push_after__lte=timezone.now(), account__status=models.MailAccountStatus.ACTIVE, account__mail_provider__enabled=True)
+    due = models.MailChange.objects.filter(
+        account__organization__identifier=organization,
+        state=models.MailChangeState.PENDING,
+        push_after__lte=timezone.now(),
+        account__status=models.MailAccountStatus.ACTIVE,
+        account__mail_provider__enabled=True,
+    )
     return sorted(set(due.values_list("account_id", flat=True)))
 
 
@@ -79,7 +88,9 @@ async def flush_mail_changes(organization: str) -> dict:
             result = await push_account(account_id)
         except Exception as error:  # recorded on the mailbox by push_now; one line here
             failed += 1
-            logger.warning("Pushing changes of mailbox %s failed: %s", account_id, error)
+            logger.warning(
+                "Pushing changes of mailbox %s failed: %s", account_id, error
+            )
             continue
         if result is None:
             skipped += 1
@@ -114,4 +125,6 @@ async def reembed_stale(organization: str) -> dict:
 async def purge_orphaned_stores(organization: str) -> dict:
     from mail import storage
 
-    return {"purged": await sync_to_async(storage.purge_orphans)(organization=organization)}
+    return {
+        "purged": await sync_to_async(storage.purge_orphans)(organization=organization)
+    }

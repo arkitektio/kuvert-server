@@ -56,29 +56,50 @@ def xoauth2_string(username: str, access_token: str) -> str:
 
 
 class _PinnedIMAP4(imaplib.IMAP4):
-    def __init__(self, host: str, port: int, timeout: float, tls: ssl.SSLContext | None) -> None:
+    def __init__(
+        self, host: str, port: int, timeout: float, tls: ssl.SSLContext | None
+    ) -> None:
         self._tls = tls
         self._timeout = timeout
         super().__init__(host, port, timeout=timeout)
 
     def _create_socket(self, timeout: float | None = None) -> socket.socket:
-        sock = net.open_socket(self.host, self.port, timeout if timeout is not None else self._timeout)
-        return self._tls.wrap_socket(sock, server_hostname=self.host) if self._tls else sock
+        sock = net.open_socket(
+            self.host, self.port, timeout if timeout is not None else self._timeout
+        )
+        return (
+            self._tls.wrap_socket(sock, server_hostname=self.host)
+            if self._tls
+            else sock
+        )
 
 
 class GuardedIMAPClient(IMAPClient):
     """An ``IMAPClient`` whose socket goes through the SSRF guard."""
 
     def _create_IMAP4(self) -> imaplib.IMAP4:  # noqa: N802 - imapclient's name
-        return _PinnedIMAP4(self.host, self.port, net.connect_timeout(), self.ssl_context if self.ssl else None)
+        return _PinnedIMAP4(
+            self.host,
+            self.port,
+            net.connect_timeout(),
+            self.ssl_context if self.ssl else None,
+        )
 
 
 def open_imap(endpoint: Endpoint, credentials: Credentials) -> GuardedIMAPClient:
     """A logged-in IMAP client."""
     net.require_security(endpoint.security)
     context = net.tls_context()
-    client = GuardedIMAPClient(endpoint.host, port=endpoint.port, ssl=endpoint.security == "TLS", ssl_context=context, timeout=net.connect_timeout())
-    client.normalise_times = False  # INTERNALDATE as aware datetimes, not the host's local time
+    client = GuardedIMAPClient(
+        endpoint.host,
+        port=endpoint.port,
+        ssl=endpoint.security == "TLS",
+        ssl_context=context,
+        timeout=net.connect_timeout(),
+    )
+    client.normalise_times = (
+        False  # INTERNALDATE as aware datetimes, not the host's local time
+    )
     try:
         if endpoint.security == "STARTTLS":
             client.starttls(context)
@@ -104,17 +125,25 @@ def open_imap(endpoint: Endpoint, credentials: Credentials) -> GuardedIMAPClient
 class GuardedPOP3(poplib.POP3):
     """A ``poplib.POP3`` whose socket goes through the SSRF guard (implicit TLS when ``tls`` is given)."""
 
-    def __init__(self, host: str, port: int, timeout: float, tls: ssl.SSLContext | None) -> None:
+    def __init__(
+        self, host: str, port: int, timeout: float, tls: ssl.SSLContext | None
+    ) -> None:
         self._tls = tls
         super().__init__(host, port, timeout=timeout)
 
     def _create_socket(self, timeout: float) -> socket.socket:
         sock = net.open_socket(self.host, self.port, timeout)
-        return self._tls.wrap_socket(sock, server_hostname=self.host) if self._tls else sock
+        return (
+            self._tls.wrap_socket(sock, server_hostname=self.host)
+            if self._tls
+            else sock
+        )
 
     def auth_xoauth2(self, username: str, access_token: str) -> bytes:
         """``AUTH XOAUTH2`` with the initial response inline (poplib has no SASL support)."""
-        payload = base64.b64encode(xoauth2_string(username, access_token).encode()).decode()
+        payload = base64.b64encode(
+            xoauth2_string(username, access_token).encode()
+        ).decode()
         try:
             return self._shortcmd(f"AUTH XOAUTH2 {payload}")
         except poplib.error_proto as error:
@@ -132,7 +161,12 @@ def open_pop3(endpoint: Endpoint, credentials: Credentials) -> GuardedPOP3:
     """A logged-in POP3 client."""
     net.require_security(endpoint.security)
     context = net.tls_context()
-    client = GuardedPOP3(endpoint.host, endpoint.port, net.connect_timeout(), context if endpoint.security == "TLS" else None)
+    client = GuardedPOP3(
+        endpoint.host,
+        endpoint.port,
+        net.connect_timeout(),
+        context if endpoint.security == "TLS" else None,
+    )
     try:
         if endpoint.security == "STARTTLS":
             client.stls(context)
@@ -176,21 +210,35 @@ class GuardedSMTP(smtplib.SMTP):
         return self._tls.wrap_socket(sock, server_hostname=host) if self._tls else sock
 
 
-def open_smtp(endpoint: Endpoint, credentials: Credentials, local_hostname: str | None = None) -> GuardedSMTP:
+def open_smtp(
+    endpoint: Endpoint, credentials: Credentials, local_hostname: str | None = None
+) -> GuardedSMTP:
     """A logged-in SMTP client."""
     net.require_security(endpoint.security)
     context = net.tls_context()
-    client = GuardedSMTP(context if endpoint.security == "TLS" else None, local_hostname=local_hostname, timeout=net.connect_timeout())
+    client = GuardedSMTP(
+        context if endpoint.security == "TLS" else None,
+        local_hostname=local_hostname,
+        timeout=net.connect_timeout(),
+    )
     try:
-        client.connect(endpoint.host, endpoint.port)  # also the name STARTTLS verifies the certificate against
+        client.connect(
+            endpoint.host, endpoint.port
+        )  # also the name STARTTLS verifies the certificate against
         if endpoint.security == "STARTTLS":
             client.starttls(context=context)
         client.ehlo_or_helo_if_needed()
         try:
             if credentials.xoauth2:
-                token = xoauth2_string(credentials.username, credentials.access_token or "")
+                token = xoauth2_string(
+                    credentials.username, credentials.access_token or ""
+                )
                 # A failed XOAUTH2 answers with a 334 challenge (an error JSON) that wants an empty reply.
-                client.auth("XOAUTH2", lambda challenge=None: token if challenge is None else "", initial_response_ok=True)
+                client.auth(
+                    "XOAUTH2",
+                    lambda challenge=None: token if challenge is None else "",
+                    initial_response_ok=True,
+                )
             elif credentials.password is not None:
                 client.login(credentials.username, credentials.password)
         except smtplib.SMTPAuthenticationError as error:

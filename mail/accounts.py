@@ -23,20 +23,28 @@ REFRESH_MARGIN = timedelta(seconds=120)
 
 def incoming_endpoint(account: models.MailAccount) -> Endpoint:
     """Where incoming mail is read."""
-    return Endpoint(account.incoming_host, account.incoming_port, account.incoming_security)
+    return Endpoint(
+        account.incoming_host, account.incoming_port, account.incoming_security
+    )
 
 
 def smtp_endpoint(account: models.MailAccount) -> Endpoint:
     """Where mail is sent; SEND_REJECTED-style failure when the mailbox has no SMTP server."""
     if not account.smtp_host or not account.smtp_port:
-        raise MailError("This mailbox has no SMTP server, so it cannot send.", models.MailErrorCode.NOT_CONFIGURED)
+        raise MailError(
+            "This mailbox has no SMTP server, so it cannot send.",
+            models.MailErrorCode.NOT_CONFIGURED,
+        )
     return Endpoint(account.smtp_host, account.smtp_port, account.smtp_security)
 
 
 def ensure_active(account: models.MailAccount) -> None:
     """Raise MAILBOX_INACTIVE unless the mailbox is ACTIVE."""
     if account.status != models.MailAccountStatus.ACTIVE:
-        raise MailError(f"This mailbox is {account.status.lower().replace('_', ' ')}.", models.MailErrorCode.MAILBOX_INACTIVE)
+        raise MailError(
+            f"This mailbox is {account.status.lower().replace('_', ' ')}.",
+            models.MailErrorCode.MAILBOX_INACTIVE,
+        )
 
 
 def provider_of(account: models.MailAccount) -> models.MailProvider:
@@ -50,13 +58,21 @@ def access_token(account: models.MailAccount) -> str:
 
     provider_of(account)
     now = timezone.now()
-    if account.access_token and account.token_expires_at and account.token_expires_at - REFRESH_MARGIN > now:
+    if (
+        account.access_token
+        and account.token_expires_at
+        and account.token_expires_at - REFRESH_MARGIN > now
+    ):
         return crypto.decrypt(account.access_token)
     try:
         return _refreshed(account, now)
     except oauth.TokenRevoked as error:
         # Outside the refresh's transaction, which the error rolled back.
-        models.MailAccount.objects.filter(pk=account.pk).update(status=models.MailAccountStatus.NEEDS_REAUTH, last_error=str(error), last_error_code=error.code)
+        models.MailAccount.objects.filter(pk=account.pk).update(
+            status=models.MailAccountStatus.NEEDS_REAUTH,
+            last_error=str(error),
+            last_error_code=error.code,
+        )
         raise
 
 
@@ -64,12 +80,24 @@ def _refreshed(account: models.MailAccount, now: datetime) -> str:
     from mail.oauth import client as oauth
 
     with transaction.atomic():
-        locked = models.MailAccount.objects.select_for_update(of=("self",)).select_related("mail_provider").get(pk=account.pk)
-        if locked.access_token and locked.token_expires_at and locked.token_expires_at - REFRESH_MARGIN > now:
-            token = crypto.decrypt(locked.access_token)  # another replica refreshed meanwhile
+        locked = (
+            models.MailAccount.objects.select_for_update(of=("self",))
+            .select_related("mail_provider")
+            .get(pk=account.pk)
+        )
+        if (
+            locked.access_token
+            and locked.token_expires_at
+            and locked.token_expires_at - REFRESH_MARGIN > now
+        ):
+            token = crypto.decrypt(
+                locked.access_token
+            )  # another replica refreshed meanwhile
         else:
             if not locked.secret:
-                raise oauth.TokenRevoked("The mailbox has no refresh token; link it again.")
+                raise oauth.TokenRevoked(
+                    "The mailbox has no refresh token; link it again."
+                )
             # The refresh token was issued to this provider's client: no other one can use it.
             client = oauth.client_for(provider_of(locked))
             tokens = oauth.refresh(client, crypto.decrypt(locked.secret))
@@ -81,7 +109,11 @@ def _refreshed(account: models.MailAccount, now: datetime) -> str:
                 locked.secret = crypto.encrypt(tokens.refresh_token)
                 fields.append("secret")
             locked.save(update_fields=fields)
-        account.access_token, account.token_expires_at, account.secret = locked.access_token, locked.token_expires_at, locked.secret
+        account.access_token, account.token_expires_at, account.secret = (
+            locked.access_token,
+            locked.token_expires_at,
+            locked.secret,
+        )
     return token
 
 
@@ -90,7 +122,9 @@ def incoming_credentials(account: models.MailAccount) -> Credentials:
     provider_of(account)
     if account.auth_method == models.AuthMethod.XOAUTH2:
         return Credentials(account.username, access_token=access_token(account))
-    return Credentials(account.username, password=crypto.decrypt_optional(account.secret) or "")
+    return Credentials(
+        account.username, password=crypto.decrypt_optional(account.secret) or ""
+    )
 
 
 def smtp_credentials(account: models.MailAccount) -> Credentials:
@@ -99,5 +133,10 @@ def smtp_credentials(account: models.MailAccount) -> Credentials:
     if account.auth_method == models.AuthMethod.XOAUTH2:
         return Credentials(account.username, access_token=access_token(account))
     if account.smtp_username:
-        return Credentials(account.smtp_username, password=crypto.decrypt_optional(account.smtp_secret) or "")
-    return Credentials(account.username, password=crypto.decrypt_optional(account.secret) or "")
+        return Credentials(
+            account.smtp_username,
+            password=crypto.decrypt_optional(account.smtp_secret) or "",
+        )
+    return Credentials(
+        account.username, password=crypto.decrypt_optional(account.secret) or ""
+    )

@@ -13,11 +13,10 @@ after a grace period.
 import logging
 from datetime import timedelta
 
-from django.db.models import Q
-from django.utils import timezone
-
 from arkitekt_datalayer.datalayer import get_current_datalayer, is_configured
 from arkitekt_datalayer.models import BigFileStore
+from django.db.models import Q
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +28,24 @@ def enabled() -> bool:
     return is_configured()
 
 
-def store_bytes(organization_id: int, creator_id: int | None, filename: str, payload: bytes, content_type: str) -> BigFileStore | None:
+def store_bytes(
+    organization_id: int,
+    creator_id: int | None,
+    filename: str,
+    payload: bytes,
+    content_type: str,
+) -> BigFileStore | None:
     """Put ``payload`` in the bucket and return its finished store (None without a datalayer)."""
     if not enabled():
         return None
-    return get_current_datalayer().store_bytes(BigFileStore, organization_id, payload, creator_id=creator_id, original_file_name=filename or None, content_type=content_type)
+    return get_current_datalayer().store_bytes(
+        BigFileStore,
+        organization_id,
+        payload,
+        creator_id=creator_id,
+        original_file_name=filename or None,
+        content_type=content_type,
+    )
 
 
 def read_bytes(store: BigFileStore) -> bytes:
@@ -45,7 +57,9 @@ def orphan(store_ids: list[int]) -> None:
     """Mark stores whose referencing rows are gone as candidates for the purge."""
     ids = [store_id for store_id in store_ids if store_id]
     if ids:
-        BigFileStore.objects.filter(id__in=ids, orphaned_at__isnull=True).update(orphaned_at=timezone.now())
+        BigFileStore.objects.filter(id__in=ids, orphaned_at__isnull=True).update(
+            orphaned_at=timezone.now()
+        )
 
 
 def _referenced() -> Q:
@@ -54,11 +68,19 @@ def _referenced() -> Q:
     return (
         Q(id__in=models.Message.objects.exclude(raw=None).values("raw_id"))
         | Q(id__in=models.Attachment.objects.exclude(store=None).values("store_id"))
-        | Q(id__in=models.OutgoingMessage.attachments.through.objects.values("bigfilestore_id"))
+        | Q(
+            id__in=models.OutgoingMessage.attachments.through.objects.values(
+                "bigfilestore_id"
+            )
+        )
     )
 
 
-def purge_orphans(grace: timedelta = timedelta(days=1), limit: int = 500, organization: str | None = None) -> int:
+def purge_orphans(
+    grace: timedelta = timedelta(days=1),
+    limit: int = 500,
+    organization: str | None = None,
+) -> int:
     """Delete (bytes, then row) stores orphaned longer than ``grace`` that nothing references again.
 
     Every organization's, or only those of ``organization`` (its identifier): a store always belongs to

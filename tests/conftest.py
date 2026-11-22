@@ -84,31 +84,63 @@ def backend_stack():
             return ports[key]
 
         def db_ready() -> None:
-            with psycopg.connect(dbname="testdb", user="test", password="test", host="localhost", port=port("db", 5432), connect_timeout=1) as connection:
+            with psycopg.connect(
+                dbname="testdb",
+                user="test",
+                password="test",
+                host="localhost",
+                port=port("db", 5432),
+                connect_timeout=1,
+            ) as connection:
                 connection.execute("SELECT 1")
 
         def mail_ready() -> None:
-            urllib.request.urlopen(f"http://localhost:{port('mail', 8080)}/api/service/readiness", timeout=1).read()
+            urllib.request.urlopen(
+                f"http://localhost:{port('mail', 8080)}/api/service/readiness",
+                timeout=1,
+            ).read()
             # Every listener greets (the API answers before the TLS ones do).
-            with IMAPClient("localhost", port("mail", 3993), ssl=True, ssl_context=_tls(), timeout=2):
+            with IMAPClient(
+                "localhost", port("mail", 3993), ssl=True, ssl_context=_tls(), timeout=2
+            ):
                 pass
-            with smtplib.SMTP_SSL("localhost", port("mail", 3465), context=_tls(), timeout=2, local_hostname="kuvert.test"):
+            with smtplib.SMTP_SSL(
+                "localhost",
+                port("mail", 3465),
+                context=_tls(),
+                timeout=2,
+                local_hostname="kuvert.test",
+            ):
                 pass
-            with smtplib.SMTP("localhost", port("mail", 3025), timeout=2, local_hostname="kuvert.test"):
+            with smtplib.SMTP(
+                "localhost", port("mail", 3025), timeout=2, local_hostname="kuvert.test"
+            ):
                 pass
-            pop = poplib.POP3_SSL("localhost", port("mail", 3995), context=_tls(), timeout=2)
+            pop = poplib.POP3_SSL(
+                "localhost", port("mail", 3995), context=_tls(), timeout=2
+            )
             pop.quit()
 
         def dovecot_ready() -> None:
-            with IMAPClient("localhost", port("dovecot", 993), ssl=True, ssl_context=_tls(), timeout=2) as client:
+            with IMAPClient(
+                "localhost",
+                port("dovecot", 993),
+                ssl=True,
+                ssl_context=_tls(),
+                timeout=2,
+            ) as client:
                 client.login("ready", "pass")
 
         def fakeoauth_ready() -> None:
-            urllib.request.urlopen(f"http://localhost:{port('fakeoauth', 8000)}/_admin/health", timeout=1).read()
+            urllib.request.urlopen(
+                f"http://localhost:{port('fakeoauth', 8000)}/_admin/health", timeout=1
+            ).read()
 
         def rustfs_ready() -> None:
             try:
-                urllib.request.urlopen(f"http://localhost:{port('rustfs', 9000)}/", timeout=1)
+                urllib.request.urlopen(
+                    f"http://localhost:{port('rustfs', 9000)}/", timeout=1
+                )
             except urllib.error.HTTPError:
                 pass  # any S3 answer (403 to an anonymous request) means it is up
 
@@ -116,7 +148,9 @@ def backend_stack():
         _wait(mail_ready, "greenmail", timeout=120)
         _wait(rustfs_ready, "rustfs")
         _wait(dovecot_ready, "dovecot")
-        _wait(fakeoauth_ready, "fakeoauth", timeout=180)  # the first run builds its image
+        _wait(
+            fakeoauth_ready, "fakeoauth", timeout=180
+        )  # the first run builds its image
         yield Stack(
             db_port=port("db", 5432),
             smtp_port=port("mail", 3025),
@@ -156,7 +190,9 @@ def django_db_setup(django_db_setup, django_db_blocker):
 
     with django_db_blocker.unblock():
         with connections["default"].cursor() as cursor:
-            cursor.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()")
+            cursor.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            )
         connections.close_all()
 
 
@@ -176,7 +212,12 @@ def fernet_key(tmp_path_factory):
 
 
 def _post(url: str, body: dict) -> dict:
-    request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read() or b"{}")
 
@@ -202,10 +243,26 @@ class GreenMail:
     def user(self, password: str = PASSWORD) -> str:
         """A fresh mail user (unique per call); returns its address."""
         address = f"u{uuid.uuid4().hex[:12]}@{MAIL_DOMAIN}"
-        _post(self.stack.mail_api_url + "/api/user", {"email": address, "login": address, "password": password})
+        _post(
+            self.stack.mail_api_url + "/api/user",
+            {"email": address, "login": address, "password": password},
+        )
         return address
 
-    def deliver(self, to: str, subject: str = "Hello", body: str = "Hi there", *, sender: str = "Alice Sender <alice@example.org>", html: str | None = None, message_id: str | None = None, in_reply_to: str | None = None, references: list[str] | None = None, attachments: list[tuple[str, str, bytes]] | None = None, date=None) -> str:  # noqa: ANN001
+    def deliver(
+        self,
+        to: str,
+        subject: str = "Hello",
+        body: str = "Hi there",
+        *,
+        sender: str = "Alice Sender <alice@example.org>",
+        html: str | None = None,
+        message_id: str | None = None,
+        in_reply_to: str | None = None,
+        references: list[str] | None = None,
+        attachments: list[tuple[str, str, bytes]] | None = None,
+        date=None,
+    ) -> str:  # noqa: ANN001
         """Deliver a message to ``to`` over plain SMTP; returns its Message-ID (without brackets)."""
         msg = EmailMessage()
         msg["From"] = sender
@@ -224,14 +281,18 @@ class GreenMail:
             msg.add_alternative(html, subtype="html")
         for filename, kind, payload in attachments or []:
             maintype, subtype = kind.split("/", 1)
-            msg.add_attachment(payload, maintype=maintype, subtype=subtype, filename=filename)
+            msg.add_attachment(
+                payload, maintype=maintype, subtype=subtype, filename=filename
+            )
         with smtplib.SMTP("localhost", self.stack.smtp_port, timeout=10) as smtp:
             smtp.send_message(msg, from_addr="alice@example.org", to_addrs=[to])
         return mid
 
     def imap(self, address: str, password: str = PASSWORD) -> IMAPClient:
         """A direct IMAP session as ``address`` (to change the mailbox behind the service's back)."""
-        client = IMAPClient("localhost", self.stack.imaps_port, ssl=True, ssl_context=_tls(), timeout=10)
+        client = IMAPClient(
+            "localhost", self.stack.imaps_port, ssl=True, ssl_context=_tls(), timeout=10
+        )
         client.login(address, password)
         return client
 
@@ -249,7 +310,9 @@ class GreenMail:
         imap.create_folder(name)
         assert imap.folder_status(name, [b"UIDVALIDITY"])[b"UIDVALIDITY"] != old
 
-    def wait_for(self, address: str, count: int, folder: str = "INBOX", timeout: float = 10) -> None:
+    def wait_for(
+        self, address: str, count: int, folder: str = "INBOX", timeout: float = 10
+    ) -> None:
         """Until ``folder`` of ``address`` holds ``count`` messages (delivery is asynchronous)."""
         deadline = time.monotonic() + timeout
         with self.imap(address) as client:
@@ -258,7 +321,9 @@ class GreenMail:
                 if len(client.search("ALL")) >= count:
                     return
                 if time.monotonic() > deadline:
-                    raise AssertionError(f"{folder} of {address} did not reach {count} messages")
+                    raise AssertionError(
+                        f"{folder} of {address} did not reach {count} messages"
+                    )
                 time.sleep(0.1)
 
 
@@ -267,14 +332,30 @@ def greenmail(backend_stack) -> GreenMail:
     return GreenMail(backend_stack)
 
 
-def _context(token: str, sub: str, org_slug: str, roles: list[str] | None = None) -> HttpContext:
-    user, _ = User.objects.get_or_create(sub=sub, iss="static_issuer", defaults={"username": f"static_issuer_{sub}"})
+def _context(
+    token: str, sub: str, org_slug: str, roles: list[str] | None = None
+) -> HttpContext:
+    user, _ = User.objects.get_or_create(
+        sub=sub, iss="static_issuer", defaults={"username": f"static_issuer_{sub}"}
+    )
     client, _ = Client.objects.get_or_create(client_id="oinsoins")
     org, _ = Organization.objects.get_or_create(identifier=f"static_issuer#{org_slug}")
-    membership, _ = Membership.objects.update_or_create(user=user, organization=org, defaults={"roles": roles or ["kuvert_editor"]})
-    request = UniversalRequest(_extensions={"token": token}, _client=client, _user=user, _organization=org)  # type: ignore[arg-type]
+    membership, _ = Membership.objects.update_or_create(
+        user=user, organization=org, defaults={"roles": roles or ["kuvert_editor"]}
+    )
+    request = UniversalRequest(
+        _extensions={"token": token},
+        _client=client,  # type: ignore[arg-type]
+        _user=user,  # type: ignore[arg-type]
+        _organization=org,  # type: ignore[arg-type]
+    )
     request.set_membership(membership)  # type: ignore[arg-type]
-    return HttpContext(request=request, response=TemporalResponse(), headers={"Authorization": f"Bearer {token}", "User-Agent": "kuvert-tests"}, type="http")
+    return HttpContext(
+        request=request,
+        response=TemporalResponse(),
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "kuvert-tests"},
+        type="http",
+    )
 
 
 @pytest.fixture
@@ -330,7 +411,12 @@ async def ws_contexts(authenticated_context):
                 await consumer.dispatch(await layer.receive(consumer.channel_name))
 
         pumps.append(asyncio.create_task(pump()))
-        return WsContext(request=UniversalRequest(_extensions={"token": token}), response=TemporalResponse(), connection_params={"token": token}, consumer=consumer)
+        return WsContext(
+            request=UniversalRequest(_extensions={"token": token}),
+            response=TemporalResponse(),
+            connection_params={"token": token},
+            consumer=consumer,
+        )
 
     yield make
     for task in pumps:
@@ -350,7 +436,9 @@ class Subscription:
         self.task: asyncio.Task | None = None
 
     async def _run(self) -> None:
-        stream = await schema.subscribe(self.query, variable_values=self.variables, context_value=self.context)
+        stream = await schema.subscribe(
+            self.query, variable_values=self.variables, context_value=self.context
+        )
         if not hasattr(stream, "__aiter__"):
             await self.events.put(stream)
             return
@@ -417,8 +505,15 @@ async def subscribe(ws_contexts):
     """Start a subscription as a static token; stopped after the test."""
     started: list[Subscription] = []
 
-    async def _start(query: str, variables: dict | None = None, token: str = "test", group: str | None = None) -> Subscription:
-        subscription = await Subscription(await ws_contexts(token), query, variables or {}).start(group)
+    async def _start(
+        query: str,
+        variables: dict | None = None,
+        token: str = "test",
+        group: str | None = None,
+    ) -> Subscription:
+        subscription = await Subscription(
+            await ws_contexts(token), query, variables or {}
+        ).start(group)
         started.append(subscription)
         return subscription
 
@@ -431,8 +526,17 @@ async def subscribe(ws_contexts):
 def aexecute(authenticated_context):
     """Run a GraphQL document as member A (or ``context``); fails the test on GraphQL errors unless ``allow_errors``."""
 
-    async def _run(query: str, variables: dict | None = None, context: HttpContext | None = None, allow_errors: bool = False):
-        result = await schema.execute(query, variable_values=variables or {}, context_value=context or authenticated_context)
+    async def _run(
+        query: str,
+        variables: dict | None = None,
+        context: HttpContext | None = None,
+        allow_errors: bool = False,
+    ):
+        result = await schema.execute(
+            query,
+            variable_values=variables or {},
+            context_value=context or authenticated_context,
+        )
         if not allow_errors:
             assert not result.errors, result.errors
         return result
@@ -440,7 +544,9 @@ def aexecute(authenticated_context):
     return _run
 
 
-def make_provider(organization: Organization, kind: str = "GENERIC", **fields) -> "models.MailProvider":  # noqa: ANN003, F821
+def make_provider(
+    organization: Organization, kind: str = "GENERIC", **fields
+) -> "models.MailProvider":  # noqa: ANN003, F821
     """A provider row as an admin's mutation would leave it (``tests/test_providers.py`` covers the mutations themselves).
 
     GENERIC is open to any server unless ``settings`` fixes them; GMAIL and MICROSOFT are the
@@ -448,13 +554,29 @@ def make_provider(organization: Organization, kind: str = "GENERIC", **fields) -
     """
     from mail import crypto, models, providers
 
-    values: dict = {"name": fields.pop("name", f"{providers.kind_of(kind).label} {uuid.uuid4().hex[:6]}"), "capabilities": sorted(c.value for c in providers.kind_of(kind).capabilities)}
+    values: dict = {
+        "name": fields.pop(
+            "name", f"{providers.kind_of(kind).label} {uuid.uuid4().hex[:6]}"
+        ),
+        "capabilities": sorted(c.value for c in providers.kind_of(kind).capabilities),
+    }
     if kind == "GENERIC":
-        values["settings"] = {"protocol": None, "incoming": None, "smtp": None, "save_sent_copy": True}
+        values["settings"] = {
+            "protocol": None,
+            "incoming": None,
+            "smtp": None,
+            "save_sent_copy": True,
+        }
     else:
-        values["settings"] = {"client_id": OAUTH_CLIENT["client_id"], "redirect_urls": [REDIRECT, "https://other.test/callback"], "tenant": "common"}
+        values["settings"] = {
+            "client_id": OAUTH_CLIENT["client_id"],
+            "redirect_urls": [REDIRECT, "https://other.test/callback"],
+            "tenant": "common",
+        }
         values["secret"] = crypto.encrypt(OAUTH_CLIENT["client_secret"])
-    return models.MailProvider.objects.create(organization=organization, kind=kind, **{**values, **fields})
+    return models.MailProvider.objects.create(
+        organization=organization, kind=kind, **{**values, **fields}
+    )
 
 
 @pytest.fixture
@@ -466,10 +588,16 @@ def provider_for(authenticated_context):
 
     def _get(kind: str, context: HttpContext | None) -> str:
         organization = (context or authenticated_context).request.organization
-        row = models.MailProvider.objects.filter(organization=organization, kind=kind).order_by("id").first()
+        row = (
+            models.MailProvider.objects.filter(organization=organization, kind=kind)
+            .order_by("id")
+            .first()
+        )
         return str((row or make_provider(organization, kind)).id)
 
-    async def _provider(kind: str = "GENERIC", context: HttpContext | None = None) -> str:
+    async def _provider(
+        kind: str = "GENERIC", context: HttpContext | None = None
+    ) -> str:
         return await database_sync_to_async(_get)(kind, context)
 
     return _provider
@@ -489,19 +617,32 @@ mutation Sync($id: ID!) { syncMailAccount(id: $id) { created updated deleted fol
 def mailbox(aexecute, greenmail, backend_stack, provider_for):
     """Link a fresh GreenMail user as a mailbox (as member A, or ``context``) through the organization's open IMAP provider; returns ``{id, address, …}``."""
 
-    async def _link(protocol: str = "IMAP", context: HttpContext | None = None, address: str | None = None, **extra) -> dict:  # noqa: ANN003
+    async def _link(
+        protocol: str = "IMAP",
+        context: HttpContext | None = None,
+        address: str | None = None,
+        **extra,
+    ) -> dict:  # noqa: ANN003
         address = address or greenmail.user()
-        port = backend_stack.pop3s_port if protocol == "POP3" else backend_stack.imaps_port
+        port = (
+            backend_stack.pop3s_port if protocol == "POP3" else backend_stack.imaps_port
+        )
         payload = {
             "provider": await provider_for("GENERIC", context),
             "emailAddress": address,
             "password": PASSWORD,
             "protocol": protocol,
             "incoming": {"host": "localhost", "port": port, "security": "TLS"},
-            "smtp": {"host": "localhost", "port": backend_stack.smtps_port, "security": "TLS"},
+            "smtp": {
+                "host": "localhost",
+                "port": backend_stack.smtps_port,
+                "security": "TLS",
+            },
             **extra,
         }
-        created = (await aexecute(CREATE, {"input": payload}, context=context)).data["createMailAccount"]
+        created = (await aexecute(CREATE, {"input": payload}, context=context)).data[
+            "createMailAccount"
+        ]
         return {**created, "address": address}
 
     return _link
@@ -519,7 +660,13 @@ class Dovecot:
         return f"u{uuid.uuid4().hex[:12]}"
 
     def imap(self, user: str) -> IMAPClient:
-        client = IMAPClient("localhost", self.stack.dovecot_port, ssl=True, ssl_context=_tls(), timeout=10)
+        client = IMAPClient(
+            "localhost",
+            self.stack.dovecot_port,
+            ssl=True,
+            ssl_context=_tls(),
+            timeout=10,
+        )
         client.login(user, self.PASSWORD)
         return client
 
@@ -535,7 +682,18 @@ def dovecot_mailbox(aexecute, dovecot, provider_for):
 
     async def _link() -> dict:
         user = dovecot.user()
-        payload = {"provider": await provider_for("GENERIC"), "emailAddress": f"{user}@dovecot.test", "username": user, "password": Dovecot.PASSWORD, "protocol": "IMAP", "incoming": {"host": "localhost", "port": dovecot.stack.dovecot_port, "security": "TLS"}}
+        payload = {
+            "provider": await provider_for("GENERIC"),
+            "emailAddress": f"{user}@dovecot.test",
+            "username": user,
+            "password": Dovecot.PASSWORD,
+            "protocol": "IMAP",
+            "incoming": {
+                "host": "localhost",
+                "port": dovecot.stack.dovecot_port,
+                "security": "TLS",
+            },
+        }
         created = (await aexecute(CREATE, {"input": payload})).data["createMailAccount"]
         return {**created, "user": user}
 
@@ -547,14 +705,19 @@ def sync(aexecute):
     """Sync a mailbox through the schema; returns ``syncMailAccount``."""
 
     async def _sync(account_id: str, context: HttpContext | None = None) -> dict:
-        return (await aexecute(SYNC, {"id": account_id}, context=context)).data["syncMailAccount"]
+        return (await aexecute(SYNC, {"id": account_id}, context=context)).data[
+            "syncMailAccount"
+        ]
 
     return _sync
 
 
 # --- OAuth -------------------------------------------------------------------------------------
 
-OAUTH_CLIENT = {"client_id": "kuvert-test-client", "client_secret": "kuvert-test-secret"}
+OAUTH_CLIENT = {
+    "client_id": "kuvert-test-client",
+    "client_secret": "kuvert-test-secret",
+}
 REDIRECT = "https://kuvert.test/callback"
 
 
@@ -566,14 +729,24 @@ class FakeOAuth:
         self.gmail = gmail
         self.microsoft = microsoft
 
-    def approve(self, auth_url: str, email: str, access_token: str | None = None, name: str = "") -> str:
+    def approve(
+        self, auth_url: str, email: str, access_token: str | None = None, name: str = ""
+    ) -> str:
         """The user approves at the provider; returns the code the redirect would carry."""
         from urllib.parse import parse_qs, urlparse
 
         query = {k: v[0] for k, v in parse_qs(urlparse(auth_url).query).items()}
         return _post(
             self.url + "/_admin/approve",
-            {"client_id": query["client_id"], "redirect_uri": query["redirect_uri"], "code_challenge": query["code_challenge"], "scope": query.get("scope", ""), "email": email, "name": name, "access_token": access_token},
+            {
+                "client_id": query["client_id"],
+                "redirect_uri": query["redirect_uri"],
+                "code_challenge": query["code_challenge"],
+                "scope": query.get("scope", ""),
+                "email": email,
+                "name": name,
+                "access_token": access_token,
+            },
         )["code"]
 
     def revoke(self, email: str) -> None:
@@ -608,9 +781,17 @@ def fakeoauth(backend_stack, settings, authenticated_context) -> FakeOAuth:
         "smtp_port": backend_stack.smtps_port,
         "timeout_seconds": 10,
     }
-    settings.KUVERT_OAUTH = {"google": endpoints, "microsoft": {**endpoints}, "link_expires_seconds": 900}
+    settings.KUVERT_OAUTH = {
+        "google": endpoints,
+        "microsoft": {**endpoints},
+        "link_expires_seconds": 900,
+    }
     organization = authenticated_context.request.organization
-    fake = FakeOAuth(backend_stack.fakeoauth_url, gmail=str(make_provider(organization, "GMAIL", name="Gmail").id), microsoft=str(make_provider(organization, "MICROSOFT", name="Microsoft").id))
+    fake = FakeOAuth(
+        backend_stack.fakeoauth_url,
+        gmail=str(make_provider(organization, "GMAIL", name="Gmail").id),
+        microsoft=str(make_provider(organization, "MICROSOFT", name="Microsoft").id),
+    )
     fake.config(expires_in=3600, rotate_refresh=False)
     yield fake
     fake.release()  # never leave token requests parked for the next test
@@ -623,16 +804,26 @@ def fakeoauth(backend_stack, settings, authenticated_context) -> FakeOAuth:
 @pytest.fixture
 def datalayer(backend_stack, settings):
     """The datalayer on, against the stack's RustFS (root keys, as the deployment's service user)."""
+    import arkitekt_datalayer.datalayer as dl_module
     import boto3
     from botocore.config import Config
 
-    import arkitekt_datalayer.datalayer as dl_module
     from kuvert_server import settings_test
 
-    settings.DATALAYER = {**settings_test._DATALAYER_TEST, "access_key": "kuverttestroot", "secret_key": "kuverttestrootsecret", "port": backend_stack.rustfs_port}
+    settings.DATALAYER = {
+        **settings_test._DATALAYER_TEST,
+        "access_key": "kuverttestroot",
+        "secret_key": "kuverttestrootsecret",
+        "port": backend_stack.rustfs_port,
+    }
     dl_module.GLOBAL_DL = None
     s3 = boto3.client(
-        "s3", endpoint_url=f"http://localhost:{backend_stack.rustfs_port}", aws_access_key_id="kuverttestroot", aws_secret_access_key="kuverttestrootsecret", region_name="us-east-1", config=Config(signature_version="s3v4")
+        "s3",
+        endpoint_url=f"http://localhost:{backend_stack.rustfs_port}",
+        aws_access_key_id="kuverttestroot",
+        aws_secret_access_key="kuverttestrootsecret",
+        region_name="us-east-1",
+        config=Config(signature_version="s3v4"),
     )
     bucket = settings.DATALAYER["bigfile"]["bucket"]
     if bucket not in {b["Name"] for b in s3.list_buckets().get("Buckets", [])}:

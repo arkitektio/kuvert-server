@@ -19,12 +19,16 @@ accounts are personal too and get no signals. Providers are the organization's o
 credentials are described), so every change to one is announced.
 """
 
-from mail import models
 from arkitekt_service.service import Service, organization_of
 
 from kuvert_server.contract import contract
+from mail import models
 
-service = Service("kuvert", hosts=contract.description.hosts, description="Mail: team mailboxes, their threads and outgoing mail.")
+service = Service(
+    "kuvert",
+    hosts=contract.description.hosts,
+    description="Mail: team mailboxes, their threads and outgoing mail.",
+)
 
 
 # --- Structures: what kuvert hosts ----------------------------------------------------
@@ -35,11 +39,21 @@ mailprovider = service.structure(
     describe=lambda provider: {
         "@kuvert/provider_kind": str(provider.kind),
         "@kuvert/enabled": provider.enabled,
-        "@kuvert/capabilities": sorted(str(capability) for capability in provider.capabilities or []),
+        "@kuvert/capabilities": sorted(
+            str(capability) for capability in provider.capabilities or []
+        ),
     },
 )
-message = service.structure(models.Message, "@kuvert/message", describe=lambda message: {"@kuvert/has_attachments": bool(message.has_attachments)})
-thread = service.structure(models.Thread, "@kuvert/thread", describe=lambda thread: {"@kuvert/message_count": thread.message_count})
+message = service.structure(
+    models.Message,
+    "@kuvert/message",
+    describe=lambda message: {"@kuvert/has_attachments": bool(message.has_attachments)},
+)
+thread = service.structure(
+    models.Thread,
+    "@kuvert/thread",
+    describe=lambda thread: {"@kuvert/message_count": thread.message_count},
+)
 outgoingmessage = service.structure(
     models.OutgoingMessage,
     "@kuvert/outgoingmessage",

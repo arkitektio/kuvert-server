@@ -45,13 +45,18 @@ def _forbidden(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or address.is_multicast
         or address.is_reserved
         or address.is_unspecified
-        or (isinstance(address, ipaddress.IPv4Address) and address in ipaddress.IPv4Network("100.64.0.0/10"))  # carrier-grade NAT, tailnets
+        or (
+            isinstance(address, ipaddress.IPv4Address)
+            and address in ipaddress.IPv4Network("100.64.0.0/10")
+        )  # carrier-grade NAT, tailnets
     )
 
 
 def is_allowed_private(host: str) -> bool:
     """Whether ``host`` is explicitly allowed to resolve to an internal address."""
-    return host.lower().rstrip(".") in {h.lower().rstrip(".") for h in mail_settings().get("allowed_private_hosts", [])}
+    return host.lower().rstrip(".") in {
+        h.lower().rstrip(".") for h in mail_settings().get("allowed_private_hosts", [])
+    }
 
 
 def resolve(host: str, port: int) -> list[tuple]:
@@ -70,7 +75,9 @@ def resolve(host: str, port: int) -> list[tuple]:
         for info in infos:
             address = ipaddress.ip_address(info[4][0].split("%")[0])
             if _forbidden(address):
-                raise HostNotAllowed(f"{host} resolves to {address}, an internal address.")
+                raise HostNotAllowed(
+                    f"{host} resolves to {address}, an internal address."
+                )
     return infos
 
 
@@ -110,4 +117,6 @@ def require_security(security: str) -> None:
     from mail.models import Security
 
     if security == Security.NONE and not mail_settings().get("allow_insecure", False):
-        raise TLSRequired("Connections without TLS are not allowed; use TLS or STARTTLS.")
+        raise TLSRequired(
+            "Connections without TLS are not allowed; use TLS or STARTTLS."
+        )

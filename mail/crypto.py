@@ -16,7 +16,11 @@ from django.conf import settings
 
 @lru_cache(maxsize=4)
 def _fernet(path: str) -> MultiFernet:
-    keys = [line.strip() for line in Path(path).read_text().splitlines() if line.strip() and not line.startswith("#")]
+    keys = [
+        line.strip()
+        for line in Path(path).read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
     if not keys:
         raise ValueError(f"No Fernet key in {path}.")
     return MultiFernet([Fernet(key) for key in keys])

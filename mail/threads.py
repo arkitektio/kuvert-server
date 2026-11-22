@@ -31,19 +31,40 @@ def _is_reply(subject: str) -> bool:
 
 def assign(message: models.Message) -> models.Thread:
     """Put ``message`` (saved, without a thread) into a thread and return it."""
-    account_messages = models.Message.objects.filter(account_id=message.account_id).exclude(pk=message.pk).exclude(thread=None)
+    account_messages = (
+        models.Message.objects.filter(account_id=message.account_id)
+        .exclude(pk=message.pk)
+        .exclude(thread=None)
+    )
     parents = [ref for ref in [message.in_reply_to, *message.references] if ref]
     thread_ids: set[int] = set()
     known = [ref for ref in [message.message_id, *parents] if ref]
     if known:
-        thread_ids |= set(models.Thread.objects.filter(account_id=message.account_id, message_ids__overlap=known).values_list("id", flat=True))
+        thread_ids |= set(
+            models.Thread.objects.filter(
+                account_id=message.account_id, message_ids__overlap=known
+            ).values_list("id", flat=True)
+        )
     if parents:
-        thread_ids |= set(account_messages.filter(message_id__in=parents).values_list("thread_id", flat=True))
+        thread_ids |= set(
+            account_messages.filter(message_id__in=parents).values_list(
+                "thread_id", flat=True
+            )
+        )
     if message.message_id:
-        thread_ids |= set(account_messages.filter(Q(in_reply_to=message.message_id) | Q(references__contains=[message.message_id])).values_list("thread_id", flat=True))
+        thread_ids |= set(
+            account_messages.filter(
+                Q(in_reply_to=message.message_id)
+                | Q(references__contains=[message.message_id])
+            ).values_list("thread_id", flat=True)
+        )
     if message.message_id:
         # A copy of the same message in another folder belongs to the same thread.
-        thread_ids |= set(account_messages.filter(message_id=message.message_id).values_list("thread_id", flat=True))
+        thread_ids |= set(
+            account_messages.filter(message_id=message.message_id).values_list(
+                "thread_id", flat=True
+            )
+        )
 
     subject = normalize_subject(message.subject)
     thread: models.Thread | None = None
@@ -54,18 +75,28 @@ def assign(message: models.Message) -> models.Thread:
             models.Message.objects.filter(thread=other).update(thread=thread)
             # Tasks keep their thread: links move over, unless the task already links the survivor.
             for link in models.TaskThread.objects.filter(thread=other):
-                if not models.TaskThread.objects.filter(task_id=link.task_id, thread=thread).exists():
+                if not models.TaskThread.objects.filter(
+                    task_id=link.task_id, thread=thread
+                ).exists():
                     models.TaskThread.objects.filter(pk=link.pk).update(thread=thread)
-            thread.message_ids = sorted(set(thread.message_ids) | set(other.message_ids))
+            thread.message_ids = sorted(
+                set(thread.message_ids) | set(other.message_ids)
+            )
             other.delete()
     elif subject and _is_reply(message.subject) and message.date:
         thread = (
-            models.Thread.objects.filter(account_id=message.account_id, subject=subject, last_message_at__gte=message.date - SUBJECT_WINDOW)
+            models.Thread.objects.filter(
+                account_id=message.account_id,
+                subject=subject,
+                last_message_at__gte=message.date - SUBJECT_WINDOW,
+            )
             .order_by("-last_message_at")
             .first()
         )
     if thread is None:
-        thread = models.Thread.objects.create(account_id=message.account_id, subject=subject)
+        thread = models.Thread.objects.create(
+            account_id=message.account_id, subject=subject
+        )
     if message.message_id and message.message_id not in thread.message_ids:
         thread.message_ids = sorted({*thread.message_ids, message.message_id})
     thread.save(update_fields=["message_ids"])
@@ -77,13 +108,20 @@ def assign(message: models.Message) -> models.Thread:
 
 def refresh(thread_id: int) -> None:
     """Recount a thread; delete it once it holds no message -- unless a task links it (it may come back)."""
-    stats = models.Message.objects.filter(thread_id=thread_id, deleted_at=None).aggregate(count=Count("id"), last=Max("date"))
+    stats = models.Message.objects.filter(
+        thread_id=thread_id, deleted_at=None
+    ).aggregate(count=Count("id"), last=Max("date"))
     # Messages deleted here (not yet on the server, or undone) still hold the thread.
-    held = models.Message.objects.filter(thread_id=thread_id).exists() or models.TaskThread.objects.filter(thread_id=thread_id).exists()
+    held = (
+        models.Message.objects.filter(thread_id=thread_id).exists()
+        or models.TaskThread.objects.filter(thread_id=thread_id).exists()
+    )
     if not stats["count"] and not held:
         models.Thread.objects.filter(id=thread_id).delete()
         return
-    models.Thread.objects.filter(id=thread_id).update(message_count=stats["count"], last_message_at=stats["last"])
+    models.Thread.objects.filter(id=thread_id).update(
+        message_count=stats["count"], last_message_at=stats["last"]
+    )
     # Counted in place, so no save stores the count among its descriptors: restored here.
     from kuvert_server.service import service  # it binds the models this module writes
 

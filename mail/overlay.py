@@ -17,7 +17,7 @@ the message and survive what sync does to rows (moves elsewhere, UIDVALIDITY res
 
 import hashlib
 from collections import defaultdict
-from typing import Iterable
+from collections.abc import Iterable
 
 from django.db.models import Q
 
@@ -27,16 +27,29 @@ from mail import models
 OPEN_STATES = (models.MailChangeState.PENDING, models.MailChangeState.FAILED)
 
 
-def key_parts(message_id: str | None, sender_address: str, date, subject: str, size: int) -> str:  # noqa: ANN001
+def key_parts(
+    message_id: str | None, sender_address: str, date, subject: str, size: int
+) -> str:  # noqa: ANN001
     """The message key: the Message-ID, else a hash of what identifies the message across folders."""
     if message_id:
         return message_id
     stamp = str(int(date.timestamp())) if date else ""
-    return "h:" + hashlib.sha256(f"{sender_address}\n{stamp}\n{subject}\n{size}".encode()).hexdigest()[:40]
+    return (
+        "h:"
+        + hashlib.sha256(
+            f"{sender_address}\n{stamp}\n{subject}\n{size}".encode()
+        ).hexdigest()[:40]
+    )
 
 
 def key_of(message: models.Message) -> str:
-    return key_parts(message.message_id, message.sender_address, message.date, message.subject, message.size)
+    return key_parts(
+        message.message_id,
+        message.sender_address,
+        message.date,
+        message.subject,
+        message.size,
+    )
 
 
 def apply(flags: Iterable[str], add: Iterable[str], remove: Iterable[str]) -> set[str]:
@@ -50,7 +63,9 @@ def apply(flags: Iterable[str], add: Iterable[str], remove: Iterable[str]) -> se
 
 def _keyword_categories(account_ids: set[int]) -> dict[int, dict[str, int]]:
     by_account: dict[int, dict[str, int]] = defaultdict(dict)
-    for category_id, account_id, keyword in models.Category.objects.filter(account_id__in=account_ids, sync=models.CategorySync.KEYWORD).values_list("id", "account_id", "keyword"):
+    for category_id, account_id, keyword in models.Category.objects.filter(
+        account_id__in=account_ids, sync=models.CategorySync.KEYWORD
+    ).values_list("id", "account_id", "keyword"):
         by_account[account_id][keyword.lower()] = category_id
     return by_account
 
@@ -62,11 +77,27 @@ def materialize(messages: Iterable[models.Message]) -> list[models.Message]:
         return []
     account_ids = {m.account_id for m in rows}
     keys = {m.message_key for m in rows if m.message_key}
-    pins = {(p.account_id, p.message_key): p for p in models.LocalPin.objects.filter(account_id__in=account_ids, message_key__in=keys)}
-    changes = {c.message_id: c for c in models.MailChange.objects.filter(message_id__in=[m.id for m in rows], kind=models.MailChangeKind.FLAGS, state__in=OPEN_STATES)}
+    pins = {
+        (p.account_id, p.message_key): p
+        for p in models.LocalPin.objects.filter(
+            account_id__in=account_ids, message_key__in=keys
+        )
+    }
+    changes = {
+        c.message_id: c
+        for c in models.MailChange.objects.filter(
+            message_id__in=[m.id for m in rows],
+            kind=models.MailChangeKind.FLAGS,
+            state__in=OPEN_STATES,
+        )
+    }
     keyword_categories = _keyword_categories(account_ids)
     assigned: dict[tuple[int, str], set[int]] = defaultdict(set)
-    for account_id, key, category_id in models.CategoryAssignment.objects.filter(account_id__in=account_ids, message_key__in=keys, category__sync=models.CategorySync.LOCAL).values_list("account_id", "message_key", "category_id"):
+    for account_id, key, category_id in models.CategoryAssignment.objects.filter(
+        account_id__in=account_ids,
+        message_key__in=keys,
+        category__sync=models.CategorySync.LOCAL,
+    ).values_list("account_id", "message_key", "category_id"):
         assigned[(account_id, key)].add(category_id)
 
     dirty = []
@@ -79,7 +110,9 @@ def materialize(messages: Iterable[models.Message]) -> list[models.Message]:
         if change is not None:
             flags = apply(flags, change.add, change.remove)
         by_keyword = keyword_categories.get(row.account_id, {})
-        categories = assigned.get((row.account_id, row.message_key), set()) | {by_keyword[f.lower()] for f in flags if f.lower() in by_keyword}
+        categories = assigned.get((row.account_id, row.message_key), set()) | {
+            by_keyword[f.lower()] for f in flags if f.lower() in by_keyword
+        }
         new_flags, new_categories = sorted(flags), sorted(categories)
         if new_flags != sorted(row.flags) or new_categories != sorted(row.category_ids):
             row.flags, row.category_ids = new_flags, new_categories
@@ -93,17 +126,34 @@ def materialize_keys(account_id: int, keys: Iterable[str]) -> list[models.Messag
     keys = [k for k in set(keys) if k]
     if not keys:
         return []
-    return materialize(models.Message.objects.filter(account_id=account_id, message_key__in=keys).only("id", "account_id", "message_key", "flags", "server_flags", "category_ids"))
+    return materialize(
+        models.Message.objects.filter(account_id=account_id, message_key__in=keys).only(
+            "id", "account_id", "message_key", "flags", "server_flags", "category_ids"
+        )
+    )
 
 
 def materialize_category(category: models.Category) -> list[models.Message]:
     """:func:`materialize` every message that is, or by keyword might be, in ``category``."""
-    rows = models.Message.objects.filter(account_id=category.account_id).filter(Q(category_ids__contains=[category.id]) | Q(flags__contains=[category.keyword]) | Q(server_flags__contains=[category.keyword]) | Q(message_key__in=category.assignments.values("message_key")))
-    return materialize(rows.only("id", "account_id", "message_key", "flags", "server_flags", "category_ids"))
+    rows = models.Message.objects.filter(account_id=category.account_id).filter(
+        Q(category_ids__contains=[category.id])
+        | Q(flags__contains=[category.keyword])
+        | Q(server_flags__contains=[category.keyword])
+        | Q(message_key__in=category.assignments.values("message_key"))
+    )
+    return materialize(
+        rows.only(
+            "id", "account_id", "message_key", "flags", "server_flags", "category_ids"
+        )
+    )
 
 
 def recount(folder_ids: Iterable[int]) -> None:
     """Unread messages per folder, as they are here (local changes included, deleted ones not)."""
     for folder_id in {f for f in folder_ids if f}:
-        unread = models.Message.objects.filter(folder_id=folder_id, deleted_at=None).exclude(flags__contains=["\\Seen"]).count()
+        unread = (
+            models.Message.objects.filter(folder_id=folder_id, deleted_at=None)
+            .exclude(flags__contains=["\\Seen"])
+            .count()
+        )
         models.MailFolder.objects.filter(id=folder_id).update(unread_count=unread)

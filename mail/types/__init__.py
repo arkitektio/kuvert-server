@@ -7,15 +7,20 @@ from typing import List, Optional
 import kante
 import strawberry
 import strawberry_django
+from arkitekt_datalayer import types as datalayer_types
 from django.conf import settings
 from django.db.models import F
 from django.utils import timezone
 from kante.types import Info
 from strawberry.scalars import JSON
 
-from arkitekt_datalayer import types as datalayer_types
 from mail import enums, filters, models, sanitize
-from mail.types._shared import DESCRIPTORS_DESCRIPTION, OrgScoped, build_prescoped_queryset, resolve_descriptors
+from mail.types._shared import (
+    DESCRIPTORS_DESCRIPTION,
+    OrgScoped,
+    build_prescoped_queryset,
+    resolve_descriptors,
+)
 from mail.types.auth import Organization, User
 
 __all__ = [
@@ -58,7 +63,10 @@ class Address:
 
 
 def _addresses(values: list[dict] | None) -> list[Address]:
-    return [Address(name=v.get("name") or "", address=v.get("address") or "") for v in values or []]
+    return [
+        Address(name=v.get("name") or "", address=v.get("address") or "")
+        for v in values or []
+    ]
 
 
 @strawberry.type(description="Where a server is reached.")
@@ -68,29 +76,39 @@ class ServerSettings:
     security: enums.Security
 
 
-def _server(value: object) -> Optional[ServerSettings]:
+def _server(value: object) -> ServerSettings | None:
     """A stored server (``mail.providers.Server``) as its GraphQL type."""
     from mail.providers import Server
 
     if not isinstance(value, Server):
         return None
-    return ServerSettings(host=value.host, port=value.port, security=enums.Security(value.security.value))
+    return ServerSettings(
+        host=value.host, port=value.port, security=enums.Security(value.security.value)
+    )
 
 
-@strawberry.type(description="A capability a provider can have switched on, as shown to whoever switches it.")
+@strawberry.type(
+    description="A capability a provider can have switched on, as shown to whoever switches it."
+)
 class ProviderCapabilityInfo:
     capability: enums.ProviderCapability
     label: str
     description: str
 
 
-@strawberry.type(description="A kind of provider this server can run. What a client needs to offer it, without knowing the kinds itself.")
+@strawberry.type(
+    description="A kind of provider this server can run. What a client needs to offer it, without knowing the kinds itself."
+)
 class ProviderKind:
     kind: enums.Provider
     label: str
     description: str
-    auth_method: enums.AuthMethod = strawberry.field(description="How its mailboxes log in: PASSWORD — link one with `createMailAccount`; XOAUTH2 — with `startOAuthLink`.")
-    capabilities: List[ProviderCapabilityInfo] = strawberry.field(description="Everything the kind can do; a provider enables a subset.")
+    auth_method: enums.AuthMethod = strawberry.field(
+        description="How its mailboxes log in: PASSWORD — link one with `createMailAccount`; XOAUTH2 — with `startOAuthLink`."
+    )
+    capabilities: list[ProviderCapabilityInfo] = strawberry.field(
+        description="Everything the kind can do; a provider enables a subset."
+    )
 
 
 def provider_kind(kind: str) -> ProviderKind:
@@ -104,66 +122,114 @@ def provider_kind(kind: str) -> ProviderKind:
         description=info.description,
         auth_method=enums.AuthMethod(info.auth_method.value),
         capabilities=[
-            ProviderCapabilityInfo(capability=enums.ProviderCapability(capability.value), label=entry.label, description=entry.description)
+            ProviderCapabilityInfo(
+                capability=enums.ProviderCapability(capability.value),
+                label=entry.label,
+                description=entry.description,
+            )
             for capability, entry in CAPABILITIES.items()
             if capability in info.capabilities
         ],
     )
 
 
-@strawberry.type(description="The OAuth client of a Gmail or Microsoft provider. Its secret is never returned.")
+@strawberry.type(
+    description="The OAuth client of a Gmail or Microsoft provider. Its secret is never returned."
+)
 class OAuthClientSettings:
     client_id: str = strawberry.field(description="The OAuth client id.")
-    redirect_urls: List[str] = strawberry.field(description="The redirect URLs a login may use; the first is the default.")
-    tenant: str = strawberry.field(description="Microsoft: the Entra tenant logins go through (`common`: any account).")
-    has_secret: bool = strawberry.field(description="Whether a client secret is stored (a public client with PKCE has none).")
+    redirect_urls: list[str] = strawberry.field(
+        description="The redirect URLs a login may use; the first is the default."
+    )
+    tenant: str = strawberry.field(
+        description="Microsoft: the Entra tenant logins go through (`common`: any account)."
+    )
+    has_secret: bool = strawberry.field(
+        description="Whether a client secret is stored (a public client with PKCE has none)."
+    )
 
 
-@strawberry.type(description="The servers of an IMAP provider: fixed by the admin, or left to each member (`fixed` false).")
+@strawberry.type(
+    description="The servers of an IMAP provider: fixed by the admin, or left to each member (`fixed` false)."
+)
 class MailServerSettings:
-    fixed: bool = strawberry.field(description="True: its mailboxes use these servers, members only give their login. False: members name the servers.")
-    protocol: Optional[enums.Protocol] = strawberry.field(description="With fixed servers: how incoming mail is read.")
-    incoming: Optional[ServerSettings] = strawberry.field(description="With fixed servers: the IMAP or POP3 server.")
-    smtp: Optional[ServerSettings] = strawberry.field(description="With fixed servers: the SMTP server (null: its mailboxes cannot send).")
-    save_sent_copy: bool = strawberry.field(description="Whether its mailboxes append sent mail to Sent.")
+    fixed: bool = strawberry.field(
+        description="True: its mailboxes use these servers, members only give their login. False: members name the servers."
+    )
+    protocol: enums.Protocol | None = strawberry.field(
+        description="With fixed servers: how incoming mail is read."
+    )
+    incoming: ServerSettings | None = strawberry.field(
+        description="With fixed servers: the IMAP or POP3 server."
+    )
+    smtp: ServerSettings | None = strawberry.field(
+        description="With fixed servers: the SMTP server (null: its mailboxes cannot send)."
+    )
+    save_sent_copy: bool = strawberry.field(
+        description="Whether its mailboxes append sent mail to Sent."
+    )
 
 
-@kante.django_type(models.MailProvider, pagination=True, filters=filters.MailProviderFilter, description="A provider the organization's admins set up (an IMAP server, a Gmail or Microsoft OAuth client). Every mailbox is linked through one; credentials are never returned.")
+@kante.django_type(
+    models.MailProvider,
+    pagination=True,
+    filters=filters.MailProviderFilter,
+    description="A provider the organization's admins set up (an IMAP server, a Gmail or Microsoft OAuth client). Every mailbox is linked through one; credentials are never returned.",
+)
 class MailProvider(OrgScoped):
     id: strawberry.ID
-    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, only=["stored_descriptors"], description=DESCRIPTORS_DESCRIPTION)
+    descriptors: JSON = kante.django_field(
+        resolver=resolve_descriptors,
+        only=["stored_descriptors"],
+        description=DESCRIPTORS_DESCRIPTION,
+    )
     name: str
     kind: enums.Provider
-    enabled: bool = strawberry_django.field(description="A disabled provider links no mailbox, and its mailboxes neither sync, push nor send.")
+    enabled: bool = strawberry_django.field(
+        description="A disabled provider links no mailbox, and its mailboxes neither sync, push nor send."
+    )
     created_at: datetime.datetime
     updated_at: datetime.datetime
-    creator: Optional[User]
+    creator: User | None
     organization: Organization
 
-    @strawberry_django.field(description="The capabilities switched on for this provider.")
-    def capabilities(self) -> List[enums.ProviderCapability]:
+    @strawberry_django.field(
+        description="The capabilities switched on for this provider."
+    )
+    def capabilities(self) -> list[enums.ProviderCapability]:
         return [enums.ProviderCapability(value) for value in self.capabilities]  # type: ignore[attr-defined]
 
     @strawberry_django.field(description="What its kind is and can do.")
     def kind_info(self) -> ProviderKind:
         return provider_kind(self.kind)  # type: ignore[arg-type]
 
-    @strawberry_django.field(description="How many mailboxes of the organization are linked through it (all of them, whoever sees them).")
+    @strawberry_django.field(
+        description="How many mailboxes of the organization are linked through it (all of them, whoever sees them)."
+    )
     def mailbox_count(self) -> int:
         return models.MailAccount.objects.filter(mail_provider_id=self.id).count()
 
-    @strawberry_django.field(description="Its OAuth client when it is a Gmail or Microsoft provider, else null.")
-    def oauth(self) -> Optional[OAuthClientSettings]:
+    @strawberry_django.field(
+        description="Its OAuth client when it is a Gmail or Microsoft provider, else null."
+    )
+    def oauth(self) -> OAuthClientSettings | None:
         from mail import providers
 
         row: models.MailProvider = self  # type: ignore[assignment]
         if providers.kind_of(row.kind).auth_method != models.AuthMethod.XOAUTH2:
             return None
         values = providers.oauth_settings(row)
-        return OAuthClientSettings(client_id=values.client_id, redirect_urls=values.redirect_urls, tenant=values.tenant, has_secret=bool(row.secret))
+        return OAuthClientSettings(
+            client_id=values.client_id,
+            redirect_urls=values.redirect_urls,
+            tenant=values.tenant,
+            has_secret=bool(row.secret),
+        )
 
-    @strawberry_django.field(description="Its servers when it is an IMAP provider, else null.")
-    def server(self) -> Optional[MailServerSettings]:
+    @strawberry_django.field(
+        description="Its servers when it is an IMAP provider, else null."
+    )
+    def server(self) -> MailServerSettings | None:
         from mail import providers
 
         row: models.MailProvider = self  # type: ignore[assignment]
@@ -179,66 +245,109 @@ class MailProvider(OrgScoped):
         )
 
 
-@kante.django_type(models.MailAccount, pagination=True, filters=filters.MailAccountFilter, description="A linked mailbox. Private to the member who linked it unless shared (`visibility`).")
+@kante.django_type(
+    models.MailAccount,
+    pagination=True,
+    filters=filters.MailAccountFilter,
+    description="A linked mailbox. Private to the member who linked it unless shared (`visibility`).",
+)
 class MailAccount(OrgScoped):
     id: strawberry.ID
     name: str
     email_address: str
     display_name: str
     provider: enums.Provider
-    mail_provider: Optional[MailProvider] = strawberry_django.field(description="The organization's provider the mailbox was linked through (null: none any more; an admin has to set one up).")
+    mail_provider: MailProvider | None = strawberry_django.field(
+        description="The organization's provider the mailbox was linked through (null: none any more; an admin has to set one up)."
+    )
     status: enums.MailAccountStatus
     visibility: enums.Visibility
     protocol: enums.Protocol
     incoming_host: str
     incoming_port: int
     incoming_security: enums.Security
-    smtp_host: Optional[str]
-    smtp_port: Optional[int]
+    smtp_host: str | None
+    smtp_port: int | None
     smtp_security: enums.Security
     username: str
     auth_method: enums.AuthMethod
     save_sent_copy: bool
     pop_leave_on_server: bool
-    push_seen: bool = strawberry_django.field(description="Read/unread is pushed to the server (else kept here).")
-    push_flagged: bool = strawberry_django.field(description="Flagging is pushed to the server (else kept here).")
-    push_keywords: bool = strawberry_django.field(description="Keywords (KEYWORD categories) are pushed to the server (else kept here).")
-    push_moves: bool = strawberry_django.field(description="Moves are pushed to the server (else refused).")
-    push_deletes: bool = strawberry_django.field(description="Deletes are pushed to the server (else only hidden here).")
-    capabilities: List[str]
-    last_synced_at: Optional[datetime.datetime]
-    last_error: Optional[str]
-    last_error_code: Optional[enums.MailErrorCode]
+    push_seen: bool = strawberry_django.field(
+        description="Read/unread is pushed to the server (else kept here)."
+    )
+    push_flagged: bool = strawberry_django.field(
+        description="Flagging is pushed to the server (else kept here)."
+    )
+    push_keywords: bool = strawberry_django.field(
+        description="Keywords (KEYWORD categories) are pushed to the server (else kept here)."
+    )
+    push_moves: bool = strawberry_django.field(
+        description="Moves are pushed to the server (else refused)."
+    )
+    push_deletes: bool = strawberry_django.field(
+        description="Deletes are pushed to the server (else only hidden here)."
+    )
+    capabilities: list[str]
+    last_synced_at: datetime.datetime | None
+    last_error: str | None
+    last_error_code: enums.MailErrorCode | None
     backfill_done: bool
     created_at: datetime.datetime
     organization: Organization
-    creator: Optional[User]
-    shared_with: List[User] = strawberry_django.field(description="Members who see the mailbox when it is SHARED.")
-    folders: List["MailFolder"] = strawberry_django.field(description="The mailbox's folders (a POP3 mailbox has one, its INBOX).")
-    categories: List["Category"] = strawberry_django.field(description="The mailbox's categories.")
+    creator: User | None
+    shared_with: list[User] = strawberry_django.field(
+        description="Members who see the mailbox when it is SHARED."
+    )
+    folders: list["MailFolder"] = strawberry_django.field(
+        description="The mailbox's folders (a POP3 mailbox has one, its INBOX)."
+    )
+    categories: list["Category"] = strawberry_django.field(
+        description="The mailbox's categories."
+    )
 
-    @strawberry_django.field(description="The re-link of this mailbox still to be finished, when you started it and it is PENDING: continue it with `resumeAuth(state)`. Null otherwise.")
+    @strawberry_django.field(
+        description="The re-link of this mailbox still to be finished, when you started it and it is PENDING: continue it with `resumeAuth(state)`. Null otherwise."
+    )
     def pending_auth(self, info: Info) -> Optional["AuthSession"]:
         link = (
-            models.OAuthLink.objects.filter(account_id=self.id, creator_id=info.context.request.user.id, status=models.OAuthLinkStatus.PENDING, expires_at__gt=timezone.now())
+            models.OAuthLink.objects.filter(
+                account_id=self.id,
+                creator_id=info.context.request.user.id,
+                status=models.OAuthLinkStatus.PENDING,
+                expires_at__gt=timezone.now(),
+            )
             .select_related("account")
             .order_by("-created_at")
             .first()
         )
         return AuthSession.of(link) if link is not None else None
 
-    @strawberry_django.field(description="Whether the caller linked the mailbox (and so may change its credentials, sharing, or delete it).")
+    @strawberry_django.field(
+        description="Whether the caller linked the mailbox (and so may change its credentials, sharing, or delete it)."
+    )
     def is_owner(self, info: Info) -> bool:
         return self.creator_id == info.context.request.user.id  # type: ignore[attr-defined]
 
-    @strawberry_django.field(select_related=["mail_provider"], description="Whether the mailbox can send: it has an SMTP server, and its provider is enabled with SEND switched on.")
+    @strawberry_django.field(
+        select_related=["mail_provider"],
+        description="Whether the mailbox can send: it has an SMTP server, and its provider is enabled with SEND switched on.",
+    )
     def can_send(self) -> bool:
         from mail import providers
 
         provider = self.mail_provider  # type: ignore[attr-defined]
-        return bool(self.smtp_host and self.smtp_port and provider is not None and provider.enabled and providers.has(provider, models.ProviderCapability.SEND))
+        return bool(
+            self.smtp_host
+            and self.smtp_port
+            and provider is not None
+            and provider.enabled
+            and providers.has(provider, models.ProviderCapability.SEND)
+        )
 
-    @strawberry_django.field(description="Whether folders, moves and flags live on the server (IMAP). On POP3 flags are local and moves are refused.")
+    @strawberry_django.field(
+        description="Whether folders, moves and flags live on the server (IMAP). On POP3 flags are local and moves are refused."
+    )
     def server_side_folders(self) -> bool:
         return self.protocol == models.Protocol.IMAP
 
@@ -246,37 +355,63 @@ class MailAccount(OrgScoped):
     def syncing(self) -> bool:
         return bool(self.sync_lease_until and self.sync_lease_until > timezone.now())  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="Unread messages over the synced folders, as they are here.")
+    @strawberry_django.field(
+        description="Unread messages over the synced folders, as they are here."
+    )
     def unread_count(self) -> int:
         return sum(f.unread_count for f in self.folders.all() if f.sync_enabled)  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="Changes made here that have not reached the server yet.")
+    @strawberry_django.field(
+        description="Changes made here that have not reached the server yet."
+    )
     def pending_changes(self) -> int:
-        return models.MailChange.objects.filter(account_id=self.id, state=models.MailChangeState.PENDING).count()  # type: ignore[attr-defined]
+        return models.MailChange.objects.filter(
+            account_id=self.id, state=models.MailChangeState.PENDING
+        ).count()  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="Changes made here that did not reach the server (see `mailChanges`).")
+    @strawberry_django.field(
+        description="Changes made here that did not reach the server (see `mailChanges`)."
+    )
     def failed_changes(self) -> int:
-        return models.MailChange.objects.filter(account_id=self.id, state=models.MailChangeState.FAILED).count()  # type: ignore[attr-defined]
+        return models.MailChange.objects.filter(
+            account_id=self.id, state=models.MailChangeState.FAILED
+        ).count()  # type: ignore[attr-defined]
 
 
-@kante.django_type(models.MailFolder, pagination=True, filters=filters.MailFolderFilter, description="A folder of a mailbox.")
+@kante.django_type(
+    models.MailFolder,
+    pagination=True,
+    filters=filters.MailFolderFilter,
+    description="A folder of a mailbox.",
+)
 class MailFolder(OrgScoped):
     id: strawberry.ID
     account: MailAccount
     path: str
     name: str
-    delimiter: Optional[str]
+    delimiter: str | None
     role: enums.FolderRole
     selectable: bool
     sync_enabled: bool
     exists_on_server: bool
     total_count: int
-    unread_count: int = strawberry_django.field(description="Unread messages in the folder, as they are here (local changes included).")
-    server_unread_count: int = strawberry_django.field(description="Unread messages in the folder, as the server counted them at the last sync.")
-    keywords_allowed: bool = strawberry_django.field(description="The folder keeps any keyword on the server (else KEYWORD categories stay local here).")
+    unread_count: int = strawberry_django.field(
+        description="Unread messages in the folder, as they are here (local changes included)."
+    )
+    server_unread_count: int = strawberry_django.field(
+        description="Unread messages in the folder, as the server counted them at the last sync."
+    )
+    keywords_allowed: bool = strawberry_django.field(
+        description="The folder keeps any keyword on the server (else KEYWORD categories stay local here)."
+    )
     backfill_done: bool
-    last_synced_at: Optional[datetime.datetime]
-    messages: List["Message"] = strawberry_django.field(pagination=True, filters=filters.MessageFilter, ordering=filters.MessageOrder, description="The folder's messages.")
+    last_synced_at: datetime.datetime | None
+    messages: list["Message"] = strawberry_django.field(
+        pagination=True,
+        filters=filters.MessageFilter,
+        ordering=filters.MessageOrder,
+        description="The folder's messages.",
+    )
 
 
 @kante.django_type(models.Attachment, description="A file attached to a message.")
@@ -286,61 +421,93 @@ class Attachment(OrgScoped):
     filename: str
     content_type: str
     size: int
-    content_id: Optional[str]
+    content_id: str | None
     inline: bool
 
-    @strawberry_django.field(description="The bytes in the datalayer (request a read grant from it); null without a datalayer.")
-    def store(self) -> Optional[datalayer_types.BigFileStore]:
+    @strawberry_django.field(
+        description="The bytes in the datalayer (request a read grant from it); null without a datalayer."
+    )
+    def store(self) -> datalayer_types.BigFileStore | None:
         return self.store  # type: ignore[attr-defined,return-value]
 
 
-@kante.django_type(models.Message, pagination=True, filters=filters.MessageFilter, ordering=filters.MessageOrder, description="A message in a folder. A copy in another folder is another message with the same `messageId`.")
+@kante.django_type(
+    models.Message,
+    pagination=True,
+    filters=filters.MessageFilter,
+    ordering=filters.MessageOrder,
+    description="A message in a folder. A copy in another folder is another message with the same `messageId`.",
+)
 class Message(OrgScoped):
     id: strawberry.ID
     account: MailAccount
     folder: MailFolder
     thread: Optional["Thread"]
-    uid: Optional[str] = strawberry_django.field(description="IMAP: the UID in the folder (a string: UIDs are 32-bit unsigned).")
-    message_id: Optional[str]
-    in_reply_to: Optional[str]
-    references: List[str]
+    uid: str | None = strawberry_django.field(
+        description="IMAP: the UID in the folder (a string: UIDs are 32-bit unsigned)."
+    )
+    message_id: str | None
+    in_reply_to: str | None
+    references: list[str]
     subject: str
     sender_name: str
     sender_address: str
-    date: Optional[datetime.datetime]
-    received_at: Optional[datetime.datetime]
+    date: datetime.datetime | None
+    received_at: datetime.datetime | None
     snippet: str
     text_body: str
     has_remote_images: bool
     size: int
-    flags: List[str] = strawberry_django.field(description="The flags and keywords as they are here: the server's with local changes applied.")
-    server_flags: List[str] = strawberry_django.field(description="The flags and keywords as the server last had them.")
+    flags: list[str] = strawberry_django.field(
+        description="The flags and keywords as they are here: the server's with local changes applied."
+    )
+    server_flags: list[str] = strawberry_django.field(
+        description="The flags and keywords as the server last had them."
+    )
     has_attachments: bool
     truncated: bool
     created_at: datetime.datetime
-    attachments: List[Attachment] = strawberry_django.field(description="Attached files, inline images included (`inline`).")
-    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, only=["stored_descriptors"], description=DESCRIPTORS_DESCRIPTION)
+    attachments: list[Attachment] = strawberry_django.field(
+        description="Attached files, inline images included (`inline`)."
+    )
+    descriptors: JSON = kante.django_field(
+        resolver=resolve_descriptors,
+        only=["stored_descriptors"],
+        description=DESCRIPTORS_DESCRIPTION,
+    )
 
     @classmethod
     def get_queryset(cls, queryset, info, **kwargs):  # noqa: ANN001, ANN206
         return build_prescoped_queryset(info, queryset).filter(deleted_at=None)
 
     @strawberry_django.field(description="The categories the message is in.")
-    def categories(self) -> List["Category"]:
+    def categories(self) -> list["Category"]:
         return list(models.Category.objects.filter(id__in=self.category_ids))  # type: ignore[attr-defined,return-value]
 
-    @strawberry_django.field(description="Changes made here that have not reached the server (pending or failed).")
-    def changes(self) -> List["MailChange"]:
+    @strawberry_django.field(
+        description="Changes made here that have not reached the server (pending or failed)."
+    )
+    def changes(self) -> list["MailChange"]:
         return list(models.MailChange.objects.filter(message_id=self.id))  # type: ignore[attr-defined,return-value]
 
     @strawberry_django.field(description="How the message here relates to the server.")
     def sync_state(self) -> enums.SyncState:
-        states = set(models.MailChange.objects.filter(message_id=self.id).values_list("state", flat=True))  # type: ignore[attr-defined]
+        states = set(
+            models.MailChange.objects.filter(message_id=self.id).values_list(
+                "state", flat=True
+            )
+        )  # type: ignore[attr-defined]
         if models.MailChangeState.FAILED in states:
             return enums.SyncState.FAILED
         if states:
             return enums.SyncState.PENDING
-        if self.deleted_at or models.LocalPin.objects.filter(account_id=self.account_id, message_key=self.message_key).exists():  # type: ignore[attr-defined]
+        if (
+            self.deleted_at  # type: ignore[attr-defined]
+            or models.LocalPin.objects.filter(
+                account_id=self.account_id,  # type: ignore[attr-defined]
+                message_key=self.message_key,  # type: ignore[attr-defined]
+            ).exists()
+        ):
             return enums.SyncState.LOCAL
         return enums.SyncState.SYNCED
 
@@ -349,19 +516,19 @@ class Message(OrgScoped):
         return Address(name=self.sender_name, address=self.sender_address)  # type: ignore[attr-defined]
 
     @strawberry_django.field(description="Reply-To addresses.")
-    def reply_to(self) -> List[Address]:
+    def reply_to(self) -> list[Address]:
         return _addresses(self.reply_to)  # type: ignore[attr-defined]
 
     @strawberry_django.field(description="To addresses.")
-    def to(self) -> List[Address]:
+    def to(self) -> list[Address]:
         return _addresses(self.to)  # type: ignore[attr-defined]
 
     @strawberry_django.field(description="Cc addresses.")
-    def cc(self) -> List[Address]:
+    def cc(self) -> list[Address]:
         return _addresses(self.cc)  # type: ignore[attr-defined]
 
     @strawberry_django.field(description="Bcc addresses (only known on sent mail).")
-    def bcc(self) -> List[Address]:
+    def bcc(self) -> list[Address]:
         return _addresses(self.bcc)  # type: ignore[attr-defined]
 
     @strawberry_django.field(description="Whether the message is read (\\Seen).")
@@ -372,12 +539,16 @@ class Message(OrgScoped):
     def is_flagged(self) -> bool:
         return "\\Flagged" in self.flags  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="Whether the message was answered (\\Answered).")
+    @strawberry_django.field(
+        description="Whether the message was answered (\\Answered)."
+    )
     def is_answered(self) -> bool:
         return "\\Answered" in self.flags  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="The HTML body, sanitized: no scripts, styles, event handlers or forms. Remote images are removed unless `allowRemote` (loading one tells the sender the mail was read); inline images keep their `cid:` references (see `attachments.contentId`). Null for a plain-text message.")
-    def html(self, allow_remote: bool = False) -> Optional[str]:
+    @strawberry_django.field(
+        description="The HTML body, sanitized: no scripts, styles, event handlers or forms. Remote images are removed unless `allowRemote` (loading one tells the sender the mail was read); inline images keep their `cid:` references (see `attachments.contentId`). Null for a plain-text message."
+    )
+    def html(self, allow_remote: bool = False) -> str | None:
         body = self.html_body  # type: ignore[attr-defined]
         if not body:
             return None
@@ -385,16 +556,26 @@ class Message(OrgScoped):
             return body
         return sanitize.block_remote(body)
 
-    @strawberry_django.field(description="The raw RFC 5322 message in the datalayer; null without a datalayer.")
-    def raw(self) -> Optional[datalayer_types.BigFileStore]:
+    @strawberry_django.field(
+        description="The raw RFC 5322 message in the datalayer; null without a datalayer."
+    )
+    def raw(self) -> datalayer_types.BigFileStore | None:
         return self.raw  # type: ignore[attr-defined,return-value]
 
 
-def _thread_messages(thread: object, info: Info, folder: Optional[strawberry.ID] = None, folder_role: Optional[enums.FolderRole] = None):  # noqa: ANN202
+def _thread_messages(
+    thread: object,
+    info: Info,
+    folder: strawberry.ID | None = None,
+    folder_role: enums.FolderRole | None = None,
+):  # noqa: ANN202
     """The conversation's messages the caller may see, optionally within a folder or a folder role."""
     from mail.scoping import scope_queryset
 
-    rows = scope_queryset(models.Message.objects.filter(thread_id=thread.id, deleted_at=None), info)  # type: ignore[attr-defined]
+    rows = scope_queryset(
+        models.Message.objects.filter(thread_id=thread.id, deleted_at=None),  # type: ignore[attr-defined]
+        info,
+    )
     if folder is not None:
         rows = rows.filter(folder_id=folder)
     if folder_role is not None:
@@ -402,55 +583,121 @@ def _thread_messages(thread: object, info: Info, folder: Optional[strawberry.ID]
     return rows
 
 
-@kante.django_type(models.Thread, pagination=True, filters=filters.ThreadFilter, ordering=filters.ThreadOrder, description="A conversation: messages linked by In-Reply-To/References, across the mailbox's folders.")
+@kante.django_type(
+    models.Thread,
+    pagination=True,
+    filters=filters.ThreadFilter,
+    ordering=filters.ThreadOrder,
+    description="A conversation: messages linked by In-Reply-To/References, across the mailbox's folders.",
+)
 class Thread(OrgScoped):
     id: strawberry.ID
     account: MailAccount
     subject: str
-    last_message_at: Optional[datetime.datetime]
+    last_message_at: datetime.datetime | None
     message_count: int
-    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, only=["stored_descriptors"], description=DESCRIPTORS_DESCRIPTION)
+    descriptors: JSON = kante.django_field(
+        resolver=resolve_descriptors,
+        only=["stored_descriptors"],
+        description=DESCRIPTORS_DESCRIPTION,
+    )
 
     @strawberry_django.field(description="The conversation's messages, oldest first.")
-    def messages(self, info: Info) -> List[Message]:
+    def messages(self, info: Info) -> list[Message]:
         from mail.scoping import scope_queryset
 
-        return list(scope_queryset(models.Message.objects.filter(thread_id=self.id, deleted_at=None), info).order_by("date", "id"))  # type: ignore[attr-defined,return-value]
+        return list(
+            scope_queryset(
+                models.Message.objects.filter(thread_id=self.id, deleted_at=None), info
+            ).order_by("date", "id")
+        )  # type: ignore[attr-defined,return-value]
 
-    @strawberry_django.field(description="Whether a message of the conversation is unread.")
+    @strawberry_django.field(
+        description="Whether a message of the conversation is unread."
+    )
     def unread(self) -> bool:
-        return models.Message.objects.filter(thread_id=self.id, deleted_at=None).exclude(flags__contains=["\\Seen"]).exists()  # type: ignore[attr-defined]
+        return (
+            models.Message.objects.filter(thread_id=self.id, deleted_at=None)
+            .exclude(flags__contains=["\\Seen"])
+            .exists()
+        )  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="The newest message, optionally only within a folder or a folder role: what a list row shows. Null when the conversation has no message there.")
-    def latest_message(self, info: Info, folder: Optional[strawberry.ID] = None, folder_role: Optional[enums.FolderRole] = None) -> Optional[Message]:
-        return _thread_messages(self, info, folder, folder_role).order_by(F("date").desc(nulls_last=True), F("received_at").desc(nulls_last=True), F("uid").desc(nulls_last=True), "-id").first()  # type: ignore[return-value]
+    @strawberry_django.field(
+        description="The newest message, optionally only within a folder or a folder role: what a list row shows. Null when the conversation has no message there."
+    )
+    def latest_message(
+        self,
+        info: Info,
+        folder: strawberry.ID | None = None,
+        folder_role: enums.FolderRole | None = None,
+    ) -> Message | None:
+        return (
+            _thread_messages(self, info, folder, folder_role)
+            .order_by(
+                F("date").desc(nulls_last=True),
+                F("received_at").desc(nulls_last=True),
+                F("uid").desc(nulls_last=True),
+                "-id",
+            )
+            .first()
+        )  # type: ignore[return-value]
 
-    @strawberry_django.field(description="Distinct senders, oldest first (\"Anna, Ben & 2 more\").")
-    def participants(self, info: Info) -> List[Address]:
+    @strawberry_django.field(
+        description='Distinct senders, oldest first ("Anna, Ben & 2 more").'
+    )
+    def participants(self, info: Info) -> list[Address]:
         seen: dict[str, Address] = {}
-        for name, address in _thread_messages(self, info).order_by(F("date").asc(nulls_last=True), F("received_at").asc(nulls_last=True), F("uid").asc(nulls_last=True), "id").values_list("sender_name", "sender_address"):
+        for name, address in (
+            _thread_messages(self, info)
+            .order_by(
+                F("date").asc(nulls_last=True),
+                F("received_at").asc(nulls_last=True),
+                F("uid").asc(nulls_last=True),
+                "id",
+            )
+            .values_list("sender_name", "sender_address")
+        ):
             key = address or name
             if key and key not in seen:
                 seen[key] = Address(name=name, address=address)
         return list(seen.values())
 
-    @strawberry_django.field(description="Unread messages, optionally only within a folder or a folder role.")
-    def unread_count(self, info: Info, folder: Optional[strawberry.ID] = None, folder_role: Optional[enums.FolderRole] = None) -> int:
-        return _thread_messages(self, info, folder, folder_role).exclude(flags__contains=["\\Seen"]).count()
+    @strawberry_django.field(
+        description="Unread messages, optionally only within a folder or a folder role."
+    )
+    def unread_count(
+        self,
+        info: Info,
+        folder: strawberry.ID | None = None,
+        folder_role: enums.FolderRole | None = None,
+    ) -> int:
+        return (
+            _thread_messages(self, info, folder, folder_role)
+            .exclude(flags__contains=["\\Seen"])
+            .count()
+        )
 
-    @strawberry_django.field(description="Whether any message of the conversation is flagged.")
+    @strawberry_django.field(
+        description="Whether any message of the conversation is flagged."
+    )
     def flagged(self, info: Info) -> bool:
-        return _thread_messages(self, info).filter(flags__contains=["\\Flagged"]).exists()
+        return (
+            _thread_messages(self, info).filter(flags__contains=["\\Flagged"]).exists()
+        )
 
-    @strawberry_django.field(description="Whether any message of the conversation has attachments.")
+    @strawberry_django.field(
+        description="Whether any message of the conversation has attachments."
+    )
     def has_attachments(self, info: Info) -> bool:
         return _thread_messages(self, info).filter(has_attachments=True).exists()
 
     @strawberry_django.field(description="The caller's tasks this conversation is in.")
-    def tasks(self, info: Info) -> List["Task"]:
+    def tasks(self, info: Info) -> list["Task"]:
         from mail.scoping import scope_queryset
 
-        return list(scope_queryset(models.Task.objects.filter(links__thread_id=self.id), info))  # type: ignore[attr-defined,return-value]
+        return list(
+            scope_queryset(models.Task.objects.filter(links__thread_id=self.id), info)
+        )  # type: ignore[attr-defined,return-value]
 
 
 @strawberry.type(description="A recipient the SMTP server refused.")
@@ -460,67 +707,112 @@ class RefusedRecipient:
     message: str
 
 
-@kante.django_type(models.OutgoingMessage, pagination=True, filters=filters.OutgoingMessageFilter, description="A message sent through a mailbox's SMTP server.")
+@kante.django_type(
+    models.OutgoingMessage,
+    pagination=True,
+    filters=filters.OutgoingMessageFilter,
+    description="A message sent through a mailbox's SMTP server.",
+)
 class OutgoingMessage(OrgScoped):
     id: strawberry.ID
     account: MailAccount
-    creator: Optional[User]
+    creator: User | None
     status: enums.OutgoingStatus
     subject: str
     text_body: str
     html_body: str
-    in_reply_to: Optional[Message]
+    in_reply_to: Message | None
     message_id: str
     saved_to_sent: bool
-    error: Optional[str]
-    error_code: Optional[enums.MailErrorCode]
+    error: str | None
+    error_code: enums.MailErrorCode | None
     created_at: datetime.datetime
-    sent_at: Optional[datetime.datetime]
-    attachments: List[datalayer_types.BigFileStore] = strawberry_django.field(description="The files attached.")
-    descriptors: JSON = kante.django_field(resolver=resolve_descriptors, only=["stored_descriptors"], description=DESCRIPTORS_DESCRIPTION)
+    sent_at: datetime.datetime | None
+    attachments: list[datalayer_types.BigFileStore] = strawberry_django.field(
+        description="The files attached."
+    )
+    descriptors: JSON = kante.django_field(
+        resolver=resolve_descriptors,
+        only=["stored_descriptors"],
+        description=DESCRIPTORS_DESCRIPTION,
+    )
 
     @strawberry_django.field(description="To addresses.")
-    def to(self) -> List[Address]:
+    def to(self) -> list[Address]:
         return _addresses(self.to)  # type: ignore[attr-defined]
 
     @strawberry_django.field(description="Cc addresses.")
-    def cc(self) -> List[Address]:
+    def cc(self) -> list[Address]:
         return _addresses(self.cc)  # type: ignore[attr-defined]
 
     @strawberry_django.field(description="Bcc addresses.")
-    def bcc(self) -> List[Address]:
+    def bcc(self) -> list[Address]:
         return _addresses(self.bcc)  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="Recipients the SMTP server refused while accepting the rest.")
-    def refused(self) -> List[RefusedRecipient]:
-        return [RefusedRecipient(address=address, code=int(value[0]), message=str(value[1])) for address, value in (self.refused or {}).items()]  # type: ignore[attr-defined]
+    @strawberry_django.field(
+        description="Recipients the SMTP server refused while accepting the rest."
+    )
+    def refused(self) -> list[RefusedRecipient]:
+        return [
+            RefusedRecipient(address=address, code=int(value[0]), message=str(value[1]))
+            for address, value in (self.refused or {}).items()
+        ]  # type: ignore[attr-defined]
 
 
-@strawberry.type(description="A Structure: what the login linked, so the app can open its page.")
+@strawberry.type(
+    description="A Structure: what the login linked, so the app can open its page."
+)
 class AuthResult:
     identifier: str
     id: strawberry.ID
-    label: Optional[str] = None
+    label: str | None = None
 
 
 #: What a finished login links, under the identifier the app opens a mailbox's page by.
 ACCOUNT = "@kuvert/account"
 
 
-@strawberry.type(description="A login at an external provider, the same shape in every service. Open `openUrl` in the user's browser; then, by `finish`: REDIRECT — the provider redirects to `redirectUrl` with `code` and `state`, call `completeAuth` with both; POLL — call `completeAuth` with the `state` every `interval` seconds until `status` is not PENDING.")
+@strawberry.type(
+    description="A login at an external provider, the same shape in every service. Open `openUrl` in the user's browser; then, by `finish`: REDIRECT — the provider redirects to `redirectUrl` with `code` and `state`, call `completeAuth` with both; POLL — call `completeAuth` with the `state` every `interval` seconds until `status` is not PENDING."
+)
 class AuthSession:
-    state: str = strawberry.field(description="Opaque, unguessable, single-use, stored server-side. THE handle of the login.")
+    state: str = strawberry.field(
+        description="Opaque, unguessable, single-use, stored server-side. THE handle of the login."
+    )
     status: enums.AuthStatus
     finish: enums.AuthFinish
-    open_url: str = strawberry.field(description="https. What the app opens in the user's browser.")
-    expires_at: datetime.datetime = strawberry.field(description="Until when the first approval can happen.")
-    redirect_url: Optional[str] = strawberry.field(default=None, description="REDIRECT: where the provider sends the browser back to (the relay URL).")
-    interval: Optional[int] = strawberry.field(default=None, description="POLL: seconds between two completeAuth calls.")
-    user_code: Optional[str] = strawberry.field(default=None, description="POLL: the code the user confirms on the provider's page.")
-    step: Optional[str] = strawberry.field(default=None, description="Null until the first approval; then what is still awaited, e.g. MFA.")
-    error_code: Optional[str] = strawberry.field(default=None, description="FAILED: machine-readable, the service's own error codes.")
-    error_message: Optional[str] = strawberry.field(default=None, description="FAILED: one sentence for the user.")
-    result: Optional[AuthResult] = strawberry.field(default=None, description="DONE: what was linked. May be set earlier when it already exists (a relink).")
+    open_url: str = strawberry.field(
+        description="https. What the app opens in the user's browser."
+    )
+    expires_at: datetime.datetime = strawberry.field(
+        description="Until when the first approval can happen."
+    )
+    redirect_url: str | None = strawberry.field(
+        default=None,
+        description="REDIRECT: where the provider sends the browser back to (the relay URL).",
+    )
+    interval: int | None = strawberry.field(
+        default=None, description="POLL: seconds between two completeAuth calls."
+    )
+    user_code: str | None = strawberry.field(
+        default=None,
+        description="POLL: the code the user confirms on the provider's page.",
+    )
+    step: str | None = strawberry.field(
+        default=None,
+        description="Null until the first approval; then what is still awaited, e.g. MFA.",
+    )
+    error_code: str | None = strawberry.field(
+        default=None,
+        description="FAILED: machine-readable, the service's own error codes.",
+    )
+    error_message: str | None = strawberry.field(
+        default=None, description="FAILED: one sentence for the user."
+    )
+    result: AuthResult | None = strawberry.field(
+        default=None,
+        description="DONE: what was linked. May be set earlier when it already exists (a relink).",
+    )
 
     @classmethod
     def of(cls, link: models.OAuthLink) -> "AuthSession":
@@ -533,12 +825,22 @@ class AuthSession:
         elif link.status == models.OAuthLinkStatus.CANCELLED:
             status = enums.AuthStatus.CANCELLED
         elif is_expired(link):
-            status, code, message = enums.AuthStatus.EXPIRED, models.MailErrorCode.CODE_EXPIRED.value, "The login was not completed in time."
+            status, code, message = (
+                enums.AuthStatus.EXPIRED,
+                models.MailErrorCode.CODE_EXPIRED.value,
+                "The login was not completed in time.",
+            )
         elif link.status == models.OAuthLinkStatus.PENDING:
             status = enums.AuthStatus.PENDING
         else:
-            status = enums.AuthStatus.EXPIRED if code == models.MailErrorCode.CODE_EXPIRED else enums.AuthStatus.FAILED
-        account = link.account  # set from the start for a re-link, else once the mailbox is linked
+            status = (
+                enums.AuthStatus.EXPIRED
+                if code == models.MailErrorCode.CODE_EXPIRED
+                else enums.AuthStatus.FAILED
+            )
+        account = (
+            link.account
+        )  # set from the start for a re-link, else once the mailbox is linked
         return cls(
             state=link.state,
             status=status,
@@ -546,24 +848,40 @@ class AuthSession:
             open_url=link.auth_url,
             expires_at=link.expires_at,
             redirect_url=link.redirect_url,
-            error_code=code if status in (enums.AuthStatus.FAILED, enums.AuthStatus.EXPIRED) else None,
-            error_message=message if status in (enums.AuthStatus.FAILED, enums.AuthStatus.EXPIRED) else None,
-            result=AuthResult(identifier=ACCOUNT, id=strawberry.ID(str(account.id)), label=account.email_address) if account is not None else None,
+            error_code=code
+            if status in (enums.AuthStatus.FAILED, enums.AuthStatus.EXPIRED)
+            else None,
+            error_message=message
+            if status in (enums.AuthStatus.FAILED, enums.AuthStatus.EXPIRED)
+            else None,
+            result=AuthResult(
+                identifier=ACCOUNT,
+                id=strawberry.ID(str(account.id)),
+                label=account.email_address,
+            )
+            if account is not None
+            else None,
         )
 
 
-@strawberry.type(description="Server settings of a well-known mail provider, to fill in a new mailbox.")
+@strawberry.type(
+    description="Server settings of a well-known mail provider, to fill in a new mailbox."
+)
 class MailPreset:
     key: str
     name: str
-    domains: List[str]
+    domains: list[str]
     provider: enums.Provider
-    imap: Optional[ServerSettings]
-    pop3: Optional[ServerSettings]
-    smtp: Optional[ServerSettings]
+    imap: ServerSettings | None
+    pop3: ServerSettings | None
+    smtp: ServerSettings | None
     save_sent_copy: bool
-    oauth: bool = strawberry.field(description="The provider is linked through OAuth (`startOAuthLink`).")
-    oauth_configured: bool = strawberry.field(description="The organization has an enabled provider for it (`mailProviders`).")
+    oauth: bool = strawberry.field(
+        description="The provider is linked through OAuth (`startOAuthLink`)."
+    )
+    oauth_configured: bool = strawberry.field(
+        description="The organization has an enabled provider for it (`mailProviders`)."
+    )
     note: str
 
 
@@ -574,7 +892,9 @@ class SyncResult:
     updated: int = strawberry.field(description="Messages whose flags changed.")
     deleted: int = strawberry.field(description="Messages gone from the server.")
     folders: int = strawberry.field(description="Folders synced.")
-    more: bool = strawberry.field(description="More mail is waiting (the backfill or a burst of new mail continues on the next sync).")
+    more: bool = strawberry.field(
+        description="More mail is waiting (the backfill or a burst of new mail continues on the next sync)."
+    )
 
 
 @strawberry.type(description="A mailbox finished syncing.")
@@ -584,68 +904,113 @@ class MailboxSyncEvent:
     updated: int
     deleted: int
     more: bool
-    folders: List[strawberry.ID] = strawberry.field(description="The folders whose messages changed, so a client refetches only those lists.")
+    folders: list[strawberry.ID] = strawberry.field(
+        description="The folders whose messages changed, so a client refetches only those lists."
+    )
 
 
-@strawberry.type(description="Where a mailbox's queue of changes stands, after something queued, pushed, failed, retried or undid changes.")
+@strawberry.type(
+    description="Where a mailbox's queue of changes stands, after something queued, pushed, failed, retried or undid changes."
+)
 class MailChangesEvent:
     account_id: strawberry.ID
     pending: int = strawberry.field(description="Changes still waiting.")
     failed: int = strawberry.field(description="Changes that did not reach the server.")
-    pushed: int = strawberry.field(description="Changes that reached the server in the pass that caused this event.")
+    pushed: int = strawberry.field(
+        description="Changes that reached the server in the pass that caused this event."
+    )
 
 
 @strawberry.type(description="What a delete did.")
 class DeleteResult:
-    deleted: int = strawberry.field(description="Messages deleted or moved to Trash (here at once; on the server after the undo window).")
+    deleted: int = strawberry.field(
+        description="Messages deleted or moved to Trash (here at once; on the server after the undo window)."
+    )
 
 
-@kante.django_type(models.MailChange, pagination=True, filters=filters.MailChangeFilter, description="A change made here that has not reached the server yet (a pushed one is gone).")
+@kante.django_type(
+    models.MailChange,
+    pagination=True,
+    filters=filters.MailChangeFilter,
+    description="A change made here that has not reached the server yet (a pushed one is gone).",
+)
 class MailChange(OrgScoped):
     id: strawberry.ID
     account: MailAccount
     kind: enums.MailChangeKind
     state: enums.MailChangeState
-    add: List[str] = strawberry_django.field(description="FLAGS: flags and keywords to add.")
-    remove: List[str] = strawberry_django.field(description="FLAGS: flags and keywords to remove.")
-    origin_folder: Optional[MailFolder] = strawberry_django.field(description="MOVE/EXPUNGE: the folder the server has the message in.")
-    target_folder: Optional[MailFolder] = strawberry_django.field(description="MOVE: the folder it goes to.")
-    push_after: datetime.datetime = strawberry_django.field(description="Not pushed before then (the undo window, or the wait after a failure).")
+    add: list[str] = strawberry_django.field(
+        description="FLAGS: flags and keywords to add."
+    )
+    remove: list[str] = strawberry_django.field(
+        description="FLAGS: flags and keywords to remove."
+    )
+    origin_folder: MailFolder | None = strawberry_django.field(
+        description="MOVE/EXPUNGE: the folder the server has the message in."
+    )
+    target_folder: MailFolder | None = strawberry_django.field(
+        description="MOVE: the folder it goes to."
+    )
+    push_after: datetime.datetime = strawberry_django.field(
+        description="Not pushed before then (the undo window, or the wait after a failure)."
+    )
     attempts: int
-    error: Optional[str]
-    error_code: Optional[enums.MailErrorCode]
-    created_by: Optional[User]
+    error: str | None
+    error_code: enums.MailErrorCode | None
+    created_by: User | None
     created_at: datetime.datetime
 
-    @strawberry_django.field(description="The message (also one deleted here, while its delete is on its way).")
-    def message(self) -> Optional[Message]:
+    @strawberry_django.field(
+        description="The message (also one deleted here, while its delete is on its way)."
+    )
+    def message(self) -> Message | None:
         return models.Message.objects.filter(id=self.message_id).first()  # type: ignore[attr-defined,return-value]
 
-    @strawberry_django.field(description="Whether `undoMailChanges` can still take it back (in its undo window, or FAILED).")
+    @strawberry_django.field(
+        description="Whether `undoMailChanges` can still take it back (in its undo window, or FAILED)."
+    )
     def undoable(self) -> bool:
-        return self.state == models.MailChangeState.FAILED or self.push_after > timezone.now()  # type: ignore[attr-defined]
+        return (
+            self.state == models.MailChangeState.FAILED
+            or self.push_after > timezone.now()
+        )  # type: ignore[attr-defined]
 
 
-@kante.django_type(models.Category, pagination=True, filters=filters.CategoryFilter, description="A category of a mailbox, shared by everyone who sees the mailbox: LOCAL, or kept on the server as an IMAP keyword (KEYWORD).")
+@kante.django_type(
+    models.Category,
+    pagination=True,
+    filters=filters.CategoryFilter,
+    description="A category of a mailbox, shared by everyone who sees the mailbox: LOCAL, or kept on the server as an IMAP keyword (KEYWORD).",
+)
 class Category(OrgScoped):
     id: strawberry.ID
     account: MailAccount
     name: str
     color: str
     sync: enums.CategorySync
-    keyword: str = strawberry_django.field(description="The IMAP keyword a KEYWORD category is kept as.")
+    keyword: str = strawberry_django.field(
+        description="The IMAP keyword a KEYWORD category is kept as."
+    )
     created_at: datetime.datetime
 
-    @strawberry_django.field(description="Messages in the category (every copy counts).")
+    @strawberry_django.field(
+        description="Messages in the category (every copy counts)."
+    )
     def message_count(self) -> int:
-        return models.Message.objects.filter(account_id=self.account_id, deleted_at=None, category_ids__contains=[self.id]).count()  # type: ignore[attr-defined]
+        return models.Message.objects.filter(
+            account_id=self.account_id,  # type: ignore[attr-defined]
+            deleted_at=None,
+            category_ids__contains=[self.id],
+        ).count()
 
 
 @strawberry.type(description="What pushing a mailbox's changes did.")
 class PushResult:
     account: MailAccount
     pushed: int = strawberry.field(description="Changes that reached the server.")
-    pending: int = strawberry.field(description="Changes still waiting (in their undo window, backing off, or a sync held the mailbox).")
+    pending: int = strawberry.field(
+        description="Changes still waiting (in their undo window, backing off, or a sync held the mailbox)."
+    )
     failed: int = strawberry.field(description="Changes that did not reach the server.")
 
 
@@ -656,49 +1021,70 @@ def _visible_links(task: object, info: Info):  # noqa: ANN202
     return scope_queryset(models.TaskThread.objects.filter(task_id=task.id), info)  # type: ignore[attr-defined]
 
 
-@kante.django_type(models.TaskList, pagination=True, filters=filters.TaskListFilter, description="A member's list of tasks (an Inbox bundle or project). Only its owner sees it.")
+@kante.django_type(
+    models.TaskList,
+    pagination=True,
+    filters=filters.TaskListFilter,
+    description="A member's list of tasks (an Inbox bundle or project). Only its owner sees it.",
+)
 class TaskList(OrgScoped):
     id: strawberry.ID
     name: str
     color: str
     position: float
     created_at: datetime.datetime
-    tasks: List["Task"] = strawberry_django.field(pagination=True, filters=filters.TaskFilter, ordering=filters.TaskOrder, description="The tasks on the list.")
+    tasks: list["Task"] = strawberry_django.field(
+        pagination=True,
+        filters=filters.TaskFilter,
+        ordering=filters.TaskOrder,
+        description="The tasks on the list.",
+    )
 
     @strawberry_django.field(description="How many tasks on the list are OPEN.")
     def open_count(self) -> int:
         return self.tasks.filter(status=models.TaskStatus.OPEN).count()  # type: ignore[attr-defined]
 
 
-@kante.django_type(models.TaskThread, description="A conversation in a task: who put it there, and (for an app) how sure it was and why.")
+@kante.django_type(
+    models.TaskThread,
+    description="A conversation in a task: who put it there, and (for an app) how sure it was and why.",
+)
 class TaskThread(OrgScoped):
     id: strawberry.ID
     task: "Task"
     thread: Thread
     source: enums.TaskLinkSource
-    confidence: Optional[float]
+    confidence: float | None
     reason: str
     position: float
     created_at: datetime.datetime
 
-    @strawberry_django.field(description="The client id of the app the link was made from, if any.")
-    def app_client_id(self) -> Optional[str]:
+    @strawberry_django.field(
+        description="The client id of the app the link was made from, if any."
+    )
+    def app_client_id(self) -> str | None:
         return self.client.client_id if self.client_id else None  # type: ignore[attr-defined]
 
 
-@kante.django_type(models.Task, pagination=True, filters=filters.TaskFilter, ordering=filters.TaskOrder, description="Something to do, made of mail conversations from any mailbox its owner can see. Only its owner sees it. Its status is independent of the mail: finishing a task changes no message.")
+@kante.django_type(
+    models.Task,
+    pagination=True,
+    filters=filters.TaskFilter,
+    ordering=filters.TaskOrder,
+    description="Something to do, made of mail conversations from any mailbox its owner can see. Only its owner sees it. Its status is independent of the mail: finishing a task changes no message.",
+)
 class Task(OrgScoped):
     id: strawberry.ID
     title: str
     notes: str
     status: enums.TaskStatus
     pinned: bool
-    due_at: Optional[datetime.datetime]
-    snoozed_until: Optional[datetime.datetime]
+    due_at: datetime.datetime | None
+    snoozed_until: datetime.datetime | None
     position: float
-    external_key: Optional[str]
-    list: Optional[TaskList]
-    completed_at: Optional[datetime.datetime]
+    external_key: str | None
+    list: TaskList | None
+    completed_at: datetime.datetime | None
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
@@ -706,29 +1092,53 @@ class Task(OrgScoped):
     def snoozed(self) -> bool:
         return bool(self.snoozed_until and self.snoozed_until > timezone.now())  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="The client id of the app that created the task, if one did.")
-    def app_client_id(self) -> Optional[str]:
+    @strawberry_django.field(
+        description="The client id of the app that created the task, if one did."
+    )
+    def app_client_id(self) -> str | None:
         return self.client.client_id if self.client_id else None  # type: ignore[attr-defined]
 
-    @strawberry_django.field(description="The task's conversations with who put them there; only those in mailboxes the caller can still see.")
-    def links(self, info: Info) -> List[TaskThread]:
-        return list(_visible_links(self, info).select_related("thread", "client"))  # type: ignore[return-value]
+    @strawberry_django.field(
+        description="The task's conversations with who put them there; only those in mailboxes the caller can still see."
+    )
+    def links(self, info: Info) -> list[TaskThread]:  # type: ignore[return-value]
+        return list(_visible_links(self, info).select_related("thread", "client"))
 
-    @strawberry_django.field(description="The task's conversations, newest first; only those in mailboxes the caller can still see.")
-    def threads(self, info: Info) -> List[Thread]:
+    @strawberry_django.field(
+        description="The task's conversations, newest first; only those in mailboxes the caller can still see."
+    )
+    def threads(self, info: Info) -> list[Thread]:  # type: ignore[return-value]
         ids = _visible_links(self, info).values("thread_id")
-        return list(models.Thread.objects.filter(id__in=ids).order_by(F("last_message_at").desc(nulls_last=True), "-id"))  # type: ignore[return-value]
+        return list(
+            models.Thread.objects.filter(id__in=ids).order_by(
+                F("last_message_at").desc(nulls_last=True), "-id"
+            )
+        )
 
-    @strawberry_django.field(description="How many conversations the task has (visible ones).")
+    @strawberry_django.field(
+        description="How many conversations the task has (visible ones)."
+    )
     def thread_count(self, info: Info) -> int:
         return _visible_links(self, info).count()
 
-    @strawberry_django.field(description="Unread messages over the task's conversations.")
+    @strawberry_django.field(
+        description="Unread messages over the task's conversations."
+    )
     def unread_count(self, info: Info) -> int:
         ids = _visible_links(self, info).values("thread_id")
-        return models.Message.objects.filter(thread_id__in=ids).exclude(flags__contains=["\\Seen"]).count()
+        return (
+            models.Message.objects.filter(thread_id__in=ids)
+            .exclude(flags__contains=["\\Seen"])
+            .count()
+        )
 
-    @strawberry_django.field(description="The newest message over the task's conversations.")
-    def latest_message(self, info: Info) -> Optional[Message]:
+    @strawberry_django.field(
+        description="The newest message over the task's conversations."
+    )
+    def latest_message(self, info: Info) -> Message | None:
         ids = _visible_links(self, info).values("thread_id")
-        return models.Message.objects.filter(thread_id__in=ids).order_by(F("date").desc(nulls_last=True), "-id").first()  # type: ignore[return-value]
+        return (
+            models.Message.objects.filter(thread_id__in=ids)
+            .order_by(F("date").desc(nulls_last=True), "-id")
+            .first()
+        )  # type: ignore[return-value]

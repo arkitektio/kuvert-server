@@ -1,7 +1,5 @@
 """Linking Gmail and Microsoft mailboxes through OAuth, with the organization's providers (see :mod:`mail.oauth.linking`)."""
 
-from typing import Optional
-
 import strawberry
 from channels.db import database_sync_to_async
 from kante.errors import ValidationError
@@ -14,25 +12,53 @@ from mail.graphql.utils import get_or_404, require_owner
 from mail.oauth import linking
 from mail.sync import in_worker
 
-__all__ = ["StartOAuthLinkInput", "CompleteAuthInput", "start_oauth_link", "complete_auth", "resume_auth", "cancel_auth", "auth_session"]
+__all__ = [
+    "StartOAuthLinkInput",
+    "CompleteAuthInput",
+    "start_oauth_link",
+    "complete_auth",
+    "resume_auth",
+    "cancel_auth",
+    "auth_session",
+]
 
 
-@strawberry.input(description="Start linking a mailbox through one of the organization's Gmail or Microsoft providers, or re-link one (`account`) whose grant ran out.")
+@strawberry.input(
+    description="Start linking a mailbox through one of the organization's Gmail or Microsoft providers, or re-link one (`account`) whose grant ran out."
+)
 class StartOAuthLinkInput:
-    provider: Optional[strawberry.ID] = strawberry.field(default=None, description="The provider to link through (see `mailProviders`). A re-link goes through the mailbox's own by default, or another of its kind.")
+    provider: strawberry.ID | None = strawberry.field(
+        default=None,
+        description="The provider to link through (see `mailProviders`). A re-link goes through the mailbox's own by default, or another of its kind.",
+    )
     protocol: enums.Protocol = enums.Protocol.IMAP
-    redirect_url: Optional[str] = strawberry.field(default=None, description="One of the deployment's registered redirect URLs; the first by default.")
-    name: Optional[str] = strawberry.field(default=None, description="A display name for the new mailbox.")
-    account: Optional[strawberry.ID] = strawberry.field(default=None, description="Re-link this mailbox (owner only).")
-    login_hint: Optional[str] = strawberry.field(default=None, description="The address to pre-fill at the provider.")
+    redirect_url: str | None = strawberry.field(
+        default=None,
+        description="One of the deployment's registered redirect URLs; the first by default.",
+    )
+    name: str | None = strawberry.field(
+        default=None, description="A display name for the new mailbox."
+    )
+    account: strawberry.ID | None = strawberry.field(
+        default=None, description="Re-link this mailbox (owner only)."
+    )
+    login_hint: str | None = strawberry.field(
+        default=None, description="The address to pre-fill at the provider."
+    )
 
 
 @strawberry.input(description="Finish (REDIRECT) or advance (POLL) a started login.")
 class CompleteAuthInput:
     state: str
-    code: Optional[str] = strawberry.field(default=None, description="REDIRECT: the `code` query parameter of the redirect. POLL: omitted.")
-    error: Optional[str] = strawberry.field(default=None, description="REDIRECT: the provider's `error` / `error_description`, when it refused.")
-    error_description: Optional[str] = None
+    code: str | None = strawberry.field(
+        default=None,
+        description="REDIRECT: the `code` query parameter of the redirect. POLL: omitted.",
+    )
+    error: str | None = strawberry.field(
+        default=None,
+        description="REDIRECT: the provider's `error` / `error_description`, when it refused.",
+    )
+    error_description: str | None = None
 
 
 def _start(info: Info, input: StartOAuthLinkInput) -> models.OAuthLink:
@@ -46,9 +72,20 @@ def _start(info: Info, input: StartOAuthLinkInput) -> models.OAuthLink:
     elif account is not None and account.mail_provider is not None:
         provider = account.mail_provider
     else:
-        raise ValidationError("Name the `provider` to link through (see `mailProviders`).")
+        raise ValidationError(
+            "Name the `provider` to link through (see `mailProviders`)."
+        )
     protocol = input.protocol.value if account is None else account.protocol
-    link = linking.start(request.organization, request.user, provider, protocol, input.redirect_url, name=input.name or "", account=account, login_hint=input.login_hint)
+    link = linking.start(
+        request.organization,
+        request.user,
+        provider,
+        protocol,
+        input.redirect_url,
+        name=input.name or "",
+        account=account,
+        login_hint=input.login_hint,
+    )
     return models.OAuthLink.objects.select_related("account").get(pk=link.pk)
 
 
@@ -64,7 +101,9 @@ def _own_login(info: Info, state: str) -> models.OAuthLink:
 
 
 def _complete(info: Info, input: CompleteAuthInput) -> models.OAuthLink:
-    link = linking.complete(_own_login(info, input.state), input.code, input.error, input.error_description)
+    link = linking.complete(
+        _own_login(info, input.state), input.code, input.error, input.error_description
+    )
     announce_auth(link.state)
     return link
 

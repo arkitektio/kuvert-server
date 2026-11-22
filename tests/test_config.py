@@ -13,7 +13,10 @@ def test_config_yaml_loads(monkeypatch):
     assert settings.postgres.db_name == "kuvert"
     assert settings.secrets.key_path == "/secrets/kuvert.fernet"
     assert settings.sync.scheduled_every_seconds == 300
-    assert settings.mail.allow_insecure is False and settings.mail.allowed_private_hosts == []
+    assert (
+        settings.mail.allow_insecure is False
+        and settings.mail.allowed_private_hosts == []
+    )
     assert settings.oauth.google is None and settings.datalayer is None
 
 

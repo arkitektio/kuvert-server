@@ -28,7 +28,9 @@ async def aget_or_404(model: type[M], info: Info, id: object) -> M:
         raise NotFound(f"{model.__name__} {id} does not exist.") from None
 
 
-def get_many(model: type[M], info: Info, ids: list | None, *, select: tuple[str, ...] = ()) -> list[M]:
+def get_many(
+    model: type[M], info: Info, ids: list | None, *, select: tuple[str, ...] = ()
+) -> list[M]:
     """Several rows by id as the caller may see them; any id not visible is NOT_FOUND."""
     if not ids:
         return []

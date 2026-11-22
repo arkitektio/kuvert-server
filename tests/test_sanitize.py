@@ -22,7 +22,20 @@ EVIL = """
 
 def test_clean_strips_active_content():
     html = sanitize.clean(EVIL)
-    for bad in ("<script", "onload", "javascript:", "<form", "<input", "<iframe", "<style", "url(", "image-set", "track.example/esc", "track.example/set", "track.example/bg"):
+    for bad in (
+        "<script",
+        "onload",
+        "javascript:",
+        "<form",
+        "<input",
+        "<iframe",
+        "<style",
+        "url(",
+        "image-set",
+        "track.example/esc",
+        "track.example/set",
+        "track.example/bg",
+    ):
         assert bad not in html, bad
     assert 'href="https://ok.example"' in html and 'rel="noopener noreferrer"' in html
     assert 'src="cid:logo"' in html and 'src="https://track.example/pixel.gif"' in html
@@ -37,8 +50,15 @@ async def test_html_field_blocks_remote_images(mailbox, greenmail, sync, aexecut
     greenmail.wait_for(box["address"], 1)
     await sync(box["id"])
     message = await models.Message.objects.aget(account_id=box["id"])
-    data = (await aexecute('query($id: ID!) { message(id: $id) { hasRemoteImages safe: html remote: html(allowRemote: true) textBody } }', {"id": str(message.id)})).data["message"]
+    data = (
+        await aexecute(
+            "query($id: ID!) { message(id: $id) { hasRemoteImages safe: html remote: html(allowRemote: true) textBody } }",
+            {"id": str(message.id)},
+        )
+    ).data["message"]
     assert data["hasRemoteImages"] is True
     assert "track.example" not in data["safe"] and "<script" not in data["safe"]
-    assert "track.example/pixel.gif" in data["remote"] and "<script" not in data["remote"]
+    assert (
+        "track.example/pixel.gif" in data["remote"] and "<script" not in data["remote"]
+    )
     assert data["textBody"] == "Plain part"

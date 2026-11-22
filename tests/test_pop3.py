@@ -22,21 +22,38 @@ async def test_pop3_sync_and_mirror(mailbox, greenmail, sync, aexecute):
     assert (await sync(box["id"]))["created"] == 2
     assert (await sync(box["id"]))["created"] == 0
 
-    folders = (await aexecute('query($a: ID!) { mailFolders(filters: {account: $a}) { path role } }', {"a": box["id"]})).data["mailFolders"]
+    folders = (
+        await aexecute(
+            "query($a: ID!) { mailFolders(filters: {account: $a}) { path role } }",
+            {"a": box["id"]},
+        )
+    ).data["mailFolders"]
     assert folders == [{"path": "INBOX", "role": "INBOX"}]
 
     # Flags are local: marking read works without touching the server.
-    message = await models.Message.objects.filter(account_id=box["id"], subject="Pop one").afirst()
-    read = await aexecute('mutation($ids: [ID!]!) { markMessagesRead(input: {messages: $ids}) { isRead } }', {"ids": [str(message.id)]})
+    message = await models.Message.objects.filter(
+        account_id=box["id"], subject="Pop one"
+    ).afirst()
+    read = await aexecute(
+        "mutation($ids: [ID!]!) { markMessagesRead(input: {messages: $ids}) { isRead } }",
+        {"ids": [str(message.id)]},
+    )
     assert read.data["markMessagesRead"] == [{"isRead": True}]
 
     # Moves are IMAP-only.
     inbox = await models.MailFolder.objects.aget(account_id=box["id"])
-    moved = await aexecute('mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id } }', {"ids": [str(message.id)], "f": str(inbox.id)}, allow_errors=True)
+    moved = await aexecute(
+        "mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id } }",
+        {"ids": [str(message.id)], "f": str(inbox.id)},
+        allow_errors=True,
+    )
     assert moved.errors[0].extensions["code"] == "UNSUPPORTED_BY_PROTOCOL"
 
     # Delete: DELE on the server, then the row.
-    await aexecute('mutation($ids: [ID!]!) { deleteMessages(input: {messages: $ids}) { deleted } }', {"ids": [str(message.id)]})
+    await aexecute(
+        "mutation($ids: [ID!]!) { deleteMessages(input: {messages: $ids}) { deleted } }",
+        {"ids": [str(message.id)]},
+    )
     assert _server_count(greenmail, box["address"]) == 1
     assert await models.Message.objects.filter(account_id=box["id"]).acount() == 1
 
@@ -48,7 +65,9 @@ async def test_pop3_sync_and_mirror(mailbox, greenmail, sync, aexecute):
     assert (await sync(box["id"]))["deleted"] == 1
 
 
-async def test_pop3_without_leave_on_server_downloads_and_deletes(mailbox, greenmail, sync):
+async def test_pop3_without_leave_on_server_downloads_and_deletes(
+    mailbox, greenmail, sync
+):
     box = await mailbox(protocol="POP3", popLeaveOnServer=False)
     greenmail.deliver(box["address"], "Take me")
     greenmail.wait_for(box["address"], 1)
@@ -67,6 +86,14 @@ async def test_pop3_cannot_move_between_folders(mailbox, greenmail, sync, aexecu
     await sync(box["id"])
     await sync(imap_box["id"])
     pop_message = await models.Message.objects.aget(account_id=box["id"])
-    imap_inbox = await models.MailFolder.objects.aget(account_id=imap_box["id"], path="INBOX")
-    result = await aexecute('mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id } }', {"ids": [str(pop_message.id)], "f": str(imap_inbox.id)}, allow_errors=True)
-    assert result.errors[0].extensions["code"] == "VALIDATION_ERROR"  # never across mailboxes
+    imap_inbox = await models.MailFolder.objects.aget(
+        account_id=imap_box["id"], path="INBOX"
+    )
+    result = await aexecute(
+        "mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id } }",
+        {"ids": [str(pop_message.id)], "f": str(imap_inbox.id)},
+        allow_errors=True,
+    )
+    assert (
+        result.errors[0].extensions["code"] == "VALIDATION_ERROR"
+    )  # never across mailboxes

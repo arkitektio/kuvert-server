@@ -10,28 +10,16 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from arkitekt_service import trust
 from joserfc.jwk import OKPKey
 
-from arkitekt_service import trust
 from kuvert_server.service import service
 
 EXPECTED = {
-    "@kuvert/mailprovider": [
-        "CREATED",
-        "UPDATED",
-        "DELETED"
-    ],
-    "@kuvert/message": [
-        "CREATED"
-    ],
-    "@kuvert/thread": [
-        "CREATED",
-        "UPDATED"
-    ],
-    "@kuvert/outgoingmessage": [
-        "CREATED",
-        "UPDATED"
-    ]
+    "@kuvert/mailprovider": ["CREATED", "UPDATED", "DELETED"],
+    "@kuvert/message": ["CREATED"],
+    "@kuvert/thread": ["CREATED", "UPDATED"],
+    "@kuvert/outgoingmessage": ["CREATED", "UPDATED"],
 }
 
 KEY = OKPKey.generate_key("Ed25519")
@@ -45,7 +33,14 @@ class _Intake:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802
                 body = self.rfile.read(int(self.headers["Content-Length"]))
-                intake.received.append({"path": self.path, "headers": dict(self.headers), "body": body, "json": json.loads(body)})
+                intake.received.append(
+                    {
+                        "path": self.path,
+                        "headers": dict(self.headers),
+                        "body": body,
+                        "json": json.loads(body),
+                    }
+                )
                 self.send_response(202)
                 self.end_headers()
 
@@ -84,11 +79,15 @@ def intake(settings):
 def _organization():
     from authentikate.models import Organization
 
-    return Organization.objects.get_or_create(identifier="static_issuer#signals-test-org")[0]
+    return Organization.objects.get_or_create(
+        identifier="static_issuer#signals-test-org"
+    )[0]
 
 
 def test_the_manifest_declares_every_model_signal():
-    assert {s["identifier"]: s["kinds"] for s in service.manifest()["signals"]} == EXPECTED
+    assert {
+        s["identifier"]: s["kinds"] for s in service.manifest()["signals"]
+    } == EXPECTED
 
 
 def test_the_manifest_lists_what_kuvert_hosts_with_its_descriptors():
@@ -96,21 +95,44 @@ def test_the_manifest_lists_what_kuvert_hosts_with_its_descriptors():
     # Everything hosted is signalled (mail for team mailboxes only); nothing else is declared.
     assert set(hosted) == set(EXPECTED)
     assert hosted["@kuvert/outgoingmessage"]["label"] == "Outgoing Email"
-    assert hosted["@kuvert/message"]["descriptors"] == [{"key": "@kuvert/has_attachments", "type": "BOOL", "description": "Whether the email has attachments (attached files), not counting inline images"}]
-    assert [(d["key"], d["type"]) for d in hosted["@kuvert/thread"]["descriptors"]] == [("@kuvert/message_count", "INT")]
-    assert [(d["key"], d["type"]) for d in hosted["@kuvert/outgoingmessage"]["descriptors"]] == [("@kuvert/status", "STRING")]
-    assert [(d["key"], d["type"]) for d in hosted["@kuvert/mailprovider"]["descriptors"]] == [("@kuvert/provider_kind", "STRING"), ("@kuvert/enabled", "BOOL"), ("@kuvert/capabilities", "LIST")]
+    assert hosted["@kuvert/message"]["descriptors"] == [
+        {
+            "key": "@kuvert/has_attachments",
+            "type": "BOOL",
+            "description": "Whether the email has attachments (attached files), not counting inline images",
+        }
+    ]
+    assert [(d["key"], d["type"]) for d in hosted["@kuvert/thread"]["descriptors"]] == [
+        ("@kuvert/message_count", "INT")
+    ]
+    assert [
+        (d["key"], d["type"]) for d in hosted["@kuvert/outgoingmessage"]["descriptors"]
+    ] == [("@kuvert/status", "STRING")]
+    assert [
+        (d["key"], d["type"]) for d in hosted["@kuvert/mailprovider"]["descriptors"]
+    ] == [
+        ("@kuvert/provider_kind", "STRING"),
+        ("@kuvert/enabled", "BOOL"),
+        ("@kuvert/capabilities", "LIST"),
+    ]
     # The signal of a structure carries exactly the keys the structure declares.
     for signal in service.manifest()["signals"]:
-        assert signal["descriptors"] == [d["key"] for d in hosted[signal["identifier"]]["descriptors"]]
+        assert signal["descriptors"] == [
+            d["key"] for d in hosted[signal["identifier"]]["descriptors"]
+        ]
 
 
 def _thread(visibility: str):
     from mail.models import MailAccount, Thread
 
     account = MailAccount.objects.create(
-        organization=_organization(), name=f"{visibility} box", email_address=f"{visibility.lower()}@example.org",
-        incoming_host="imap.example.org", incoming_port=993, username=visibility.lower(), visibility=visibility,
+        organization=_organization(),
+        name=f"{visibility} box",
+        email_address=f"{visibility.lower()}@example.org",
+        incoming_host="imap.example.org",
+        incoming_port=993,
+        username=visibility.lower(),
+        visibility=visibility,
     )
     return Thread.objects.create(account=account)
 
@@ -119,8 +141,20 @@ def _thread(visibility: str):
 def test_team_mailbox_threads_are_signalled(intake):
     thread = _thread("ORGANIZATION")
     (received,) = intake.of("@kuvert/thread")
-    assert (received["json"]["kind"], received["json"]["object"]) == ("CREATED", str(thread.pk))
-    assert trust.verify("POST", received["path"], received["body"], received["headers"]["Authorization"], audience="rekuest").issuer == "kuvert"
+    assert (received["json"]["kind"], received["json"]["object"]) == (
+        "CREATED",
+        str(thread.pk),
+    )
+    assert (
+        trust.verify(
+            "POST",
+            received["path"],
+            received["body"],
+            received["headers"]["Authorization"],
+            audience="rekuest",
+        ).issuer
+        == "kuvert"
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -132,8 +166,15 @@ def test_a_provider_change_is_signalled_without_its_credentials(intake):
     provider.save()
     created, updated = intake.of("@kuvert/mailprovider", count=2)
     assert [created["json"]["kind"], updated["json"]["kind"]] == ["CREATED", "UPDATED"]
-    assert updated["json"]["descriptors"] == {"@kuvert/provider_kind": "GMAIL", "@kuvert/enabled": False, "@kuvert/capabilities": ["SCHEDULED_SYNC", "SEND"]}
-    assert "kuvert-test-secret" not in updated["body"].decode() and "secret" not in updated["json"]
+    assert updated["json"]["descriptors"] == {
+        "@kuvert/provider_kind": "GMAIL",
+        "@kuvert/enabled": False,
+        "@kuvert/capabilities": ["SCHEDULED_SYNC", "SEND"],
+    }
+    assert (
+        "kuvert-test-secret" not in updated["body"].decode()
+        and "secret" not in updated["json"]
+    )
 
 
 @pytest.mark.django_db(transaction=True)

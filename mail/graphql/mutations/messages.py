@@ -6,7 +6,6 @@ right after the request (``writeback.push_inline``), after its undo window, or w
 """
 
 from collections import defaultdict
-from typing import Optional
 
 import strawberry
 from channels.db import database_sync_to_async
@@ -39,10 +38,14 @@ __all__ = [
     "push_all_mail_changes",
 ]
 
-_FLAG_CHARS = set("\\$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
+_FLAG_CHARS = set(
+    "\\$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-."
+)
 
 
-@strawberry.input(description="Flags to add to and remove from messages (\\Seen, \\Flagged, \\Answered, \\Draft, or keywords like $Label1).")
+@strawberry.input(
+    description="Flags to add to and remove from messages (\\Seen, \\Flagged, \\Answered, \\Draft, or keywords like $Label1)."
+)
 class SetMessageFlagsInput:
     messages: list[strawberry.ID]
     add: list[str] = strawberry.field(default_factory=list)
@@ -55,35 +58,57 @@ class MarkMessagesInput:
     read: bool = True
 
 
-@strawberry.input(description="Move messages to another folder of their mailbox: one `folder`, or each message's own mailbox's folder of a `role` (Archive, Junk, ...).")
+@strawberry.input(
+    description="Move messages to another folder of their mailbox: one `folder`, or each message's own mailbox's folder of a `role` (Archive, Junk, ...)."
+)
 class MoveMessagesInput:
     messages: list[strawberry.ID]
-    folder: Optional[strawberry.ID] = None
-    role: Optional[enums.FolderRole] = strawberry.field(default=None, description="Instead of `folder`: the folder of this role in each message's mailbox (messages of several mailboxes move at once).")
+    folder: strawberry.ID | None = None
+    role: enums.FolderRole | None = strawberry.field(
+        default=None,
+        description="Instead of `folder`: the folder of this role in each message's mailbox (messages of several mailboxes move at once).",
+    )
 
 
 @strawberry.input(description="Delete messages: into Trash, or for good.")
 class DeleteMessagesInput:
     messages: list[strawberry.ID]
-    permanent: bool = strawberry.field(default=False, description="Expunge instead of moving to Trash (messages already in Trash are always expunged).")
+    permanent: bool = strawberry.field(
+        default=False,
+        description="Expunge instead of moving to Trash (messages already in Trash are always expunged).",
+    )
 
 
-@strawberry.input(description="Put messages into categories of their mailbox and take them out (every copy of each message).")
+@strawberry.input(
+    description="Put messages into categories of their mailbox and take them out (every copy of each message)."
+)
 class CategorizeMessagesInput:
     messages: list[strawberry.ID]
-    add: list[strawberry.ID] = strawberry.field(default_factory=list, description="Categories to put the messages into.")
-    remove: list[strawberry.ID] = strawberry.field(default_factory=list, description="Categories to take the messages out of.")
+    add: list[strawberry.ID] = strawberry.field(
+        default_factory=list, description="Categories to put the messages into."
+    )
+    remove: list[strawberry.ID] = strawberry.field(
+        default_factory=list, description="Categories to take the messages out of."
+    )
 
 
-@strawberry.input(description="Take back changes that have not reached the server: by change, or every one of some messages.")
+@strawberry.input(
+    description="Take back changes that have not reached the server: by change, or every one of some messages."
+)
 class UndoMailChangesInput:
-    changes: Optional[list[strawberry.ID]] = None
-    messages: Optional[list[strawberry.ID]] = None
+    changes: list[strawberry.ID] | None = None
+    messages: list[strawberry.ID] | None = None
 
 
 def _check_flags(flags: list[str]) -> None:
     for flag in flags:
-        if not flag or len(flag) > 100 or not set(flag) <= _FLAG_CHARS or flag.count("\\") > 1 or ("\\" in flag and not flag.startswith("\\")):
+        if (
+            not flag
+            or len(flag) > 100
+            or not set(flag) <= _FLAG_CHARS
+            or flag.count("\\") > 1
+            or ("\\" in flag and not flag.startswith("\\"))
+        ):
             raise ValidationError(f"{flag!r} is not a valid flag or keyword.")
         if flag == "\\Deleted":
             raise ValidationError("Use deleteMessages to delete.")
@@ -91,7 +116,9 @@ def _check_flags(flags: list[str]) -> None:
             raise ValidationError("\\Recent is set by the server.")
 
 
-def _load(info: Info, ids: list[strawberry.ID]) -> dict[int, tuple[models.MailAccount, list[models.Message]]]:
+def _load(
+    info: Info, ids: list[strawberry.ID]
+) -> dict[int, tuple[models.MailAccount, list[models.Message]]]:
     """The messages by mailbox (NOT_FOUND for any the caller may not see)."""
     if not ids:
         raise ValidationError("No messages given.")
@@ -107,38 +134,56 @@ def _user(info: Info):  # noqa: ANN202
     return info.context.request.user
 
 
-async def _flags(info: Info, ids: list[strawberry.ID], add: list[str], remove: list[str]) -> list[models.Message]:
+async def _flags(
+    info: Info, ids: list[strawberry.ID], add: list[str], remove: list[str]
+) -> list[models.Message]:
     out: list[models.Message] = []
     groups = await database_sync_to_async(_load)(info, ids)
     for account, messages in groups.values():
-        out += await database_sync_to_async(changes.set_flags)(account, messages, add, remove, _user(info))
+        out += await database_sync_to_async(changes.set_flags)(
+            account, messages, add, remove, _user(info)
+        )
     for account_id in groups:
         await push_soon(account_id)
     return out
 
 
 @translated
-async def set_message_flags(info: Info, input: SetMessageFlagsInput) -> list[types.Message]:
+async def set_message_flags(
+    info: Info, input: SetMessageFlagsInput
+) -> list[types.Message]:
     """Add and remove flags: here at once, on the server as the mailbox's push settings say."""
     _check_flags(input.add + input.remove)
     return await _flags(info, input.messages, input.add, input.remove)  # type: ignore[return-value]
 
 
 @translated
-async def mark_messages_read(info: Info, input: MarkMessagesInput) -> list[types.Message]:
+async def mark_messages_read(
+    info: Info, input: MarkMessagesInput
+) -> list[types.Message]:
     """Mark messages read or unread (\\Seen)."""
     add, remove = (["\\Seen"], []) if input.read else ([], ["\\Seen"])
     return await _flags(info, input.messages, add, remove)  # type: ignore[return-value]
 
 
-def _role_folders(groups: dict[int, tuple[models.MailAccount, list[models.Message]]], role: enums.FolderRole) -> dict[int, models.MailFolder]:
+def _role_folders(
+    groups: dict[int, tuple[models.MailAccount, list[models.Message]]],
+    role: enums.FolderRole,
+) -> dict[int, models.MailFolder]:
     """Each mailbox's folder of ``role`` that can hold mail; a mailbox without one is refused."""
     found: dict[int, models.MailFolder] = {}
-    for folder in models.MailFolder.objects.filter(account_id__in=list(groups), role=role.value, selectable=True, exists_on_server=True).order_by("account_id", "id"):
+    for folder in models.MailFolder.objects.filter(
+        account_id__in=list(groups),
+        role=role.value,
+        selectable=True,
+        exists_on_server=True,
+    ).order_by("account_id", "id"):
         found.setdefault(folder.account_id, folder)
     for account_id, (account, _) in groups.items():
         if account_id not in found:
-            raise ValidationError(f"{account.email_address} has no {role.value.title()} folder.")
+            raise ValidationError(
+                f"{account.email_address} has no {role.value.title()} folder."
+            )
     return found
 
 
@@ -149,16 +194,22 @@ async def move_messages(info: Info, input: MoveMessagesInput) -> list[types.Mess
         raise ValidationError("Give either a folder or a role.")
     groups = await database_sync_to_async(_load)(info, input.messages)
     if input.folder is not None:
-        folder = await database_sync_to_async(get_or_404)(models.MailFolder, info, input.folder)
+        folder = await database_sync_to_async(get_or_404)(
+            models.MailFolder, info, input.folder
+        )
         if set(groups) - {folder.account_id}:
-            raise ValidationError("Messages can only be moved within their own mailbox.")
+            raise ValidationError(
+                "Messages can only be moved within their own mailbox."
+            )
         targets = {folder.account_id: folder}
     else:
         assert input.role is not None
         targets = await database_sync_to_async(_role_folders)(groups, input.role)
     moved: list[models.Message] = []
     for account_id, (account, messages) in groups.items():
-        moved += await database_sync_to_async(changes.move)(account, messages, targets[account_id], _user(info))
+        moved += await database_sync_to_async(changes.move)(
+            account, messages, targets[account_id], _user(info)
+        )
     for account_id in groups:
         await push_soon(account_id)
     return moved  # type: ignore[return-value]
@@ -170,26 +221,40 @@ async def delete_messages(info: Info, input: DeleteMessagesInput) -> types.Delet
     deleted = 0
     groups = await database_sync_to_async(_load)(info, input.messages)
     for account, messages in groups.values():
-        deleted += await database_sync_to_async(changes.delete)(account, messages, input.permanent, _user(info))
+        deleted += await database_sync_to_async(changes.delete)(
+            account, messages, input.permanent, _user(info)
+        )
     for account_id in groups:
         await push_soon(account_id)
     return types.DeleteResult(deleted=deleted)
 
 
-def _categorize(info: Info, input: CategorizeMessagesInput) -> tuple[list[models.Message], list[int]]:
+def _categorize(
+    info: Info, input: CategorizeMessagesInput
+) -> tuple[list[models.Message], list[int]]:
     groups = _load(info, input.messages)
     add = get_many(models.Category, info, input.add)
     remove = get_many(models.Category, info, input.remove)
     if any(c.account_id not in groups for c in [*add, *remove]):
-        raise ValidationError("A category belongs to one mailbox; use the categories of the messages' mailboxes.")
+        raise ValidationError(
+            "A category belongs to one mailbox; use the categories of the messages' mailboxes."
+        )
     out: list[models.Message] = []
     for account, messages in groups.values():
-        out += changes.categorize(account, messages, [c for c in add if c.account_id == account.id], [c for c in remove if c.account_id == account.id], _user(info))
+        out += changes.categorize(
+            account,
+            messages,
+            [c for c in add if c.account_id == account.id],
+            [c for c in remove if c.account_id == account.id],
+            _user(info),
+        )
     return out, list(groups)
 
 
 @translated
-async def categorize_messages(info: Info, input: CategorizeMessagesInput) -> list[types.Message]:
+async def categorize_messages(
+    info: Info, input: CategorizeMessagesInput
+) -> list[types.Message]:
     """Put messages into categories and take them out: here at once; a KEYWORD category also on the server."""
     out, accounts = await database_sync_to_async(_categorize)(info, input)
     for account_id in accounts:
@@ -209,13 +274,17 @@ def _undo(info: Info, input: UndoMailChangesInput) -> list[models.Message]:
         by_account[change.account_id].append(change)
     out: list[models.Message] = []
     for account_id, account_changes in by_account.items():
-        out += changes.undo(models.MailAccount.objects.get(id=account_id), account_changes)
+        out += changes.undo(
+            models.MailAccount.objects.get(id=account_id), account_changes
+        )
         announce_changes(account_id)
     return out
 
 
 @translated
-async def undo_mail_changes(info: Info, input: UndoMailChangesInput) -> list[types.Message]:
+async def undo_mail_changes(
+    info: Info, input: UndoMailChangesInput
+) -> list[types.Message]:
     """Take back changes that have not reached the server (in their undo window, or FAILED); returns the messages as they are now."""
     return await database_sync_to_async(_undo)(info, input)  # type: ignore[return-value]
 
@@ -229,12 +298,16 @@ def _revert(info: Info, messages: list[strawberry.ID]) -> list[models.Message]:
 
 
 @translated
-async def revert_messages_to_server(info: Info, messages: list[strawberry.ID]) -> list[types.Message]:
+async def revert_messages_to_server(
+    info: Info, messages: list[strawberry.ID]
+) -> list[types.Message]:
     """Drop what was changed here on messages and has not reached the server: local-only flags, queued flag changes, local-only deletes."""
     return await database_sync_to_async(_revert)(info, messages)  # type: ignore[return-value]
 
 
-def _retry(info: Info, ids: list[strawberry.ID] | None, account: strawberry.ID | None) -> tuple[list[models.MailChange], set[int]]:
+def _retry(
+    info: Info, ids: list[strawberry.ID] | None, account: strawberry.ID | None
+) -> tuple[list[models.MailChange], set[int]]:
     from django.utils import timezone
 
     if ids is None and account is None:
@@ -242,25 +315,55 @@ def _retry(info: Info, ids: list[strawberry.ID] | None, account: strawberry.ID |
     rows = get_many(models.MailChange, info, ids) if ids else []
     if account is not None:
         mailbox = get_or_404(models.MailAccount, info, account)
-        rows += list(models.MailChange.objects.filter(account=mailbox, state=models.MailChangeState.FAILED))
-    models.MailChange.objects.filter(id__in=[r.id for r in rows], state=models.MailChangeState.FAILED).update(state=models.MailChangeState.PENDING, attempts=0, error=None, error_code=None, push_after=timezone.now())
-    return list(models.MailChange.objects.filter(id__in=[r.id for r in rows])), {r.account_id for r in rows}
+        rows += list(
+            models.MailChange.objects.filter(
+                account=mailbox, state=models.MailChangeState.FAILED
+            )
+        )
+    models.MailChange.objects.filter(
+        id__in=[r.id for r in rows], state=models.MailChangeState.FAILED
+    ).update(
+        state=models.MailChangeState.PENDING,
+        attempts=0,
+        error=None,
+        error_code=None,
+        push_after=timezone.now(),
+    )
+    return list(models.MailChange.objects.filter(id__in=[r.id for r in rows])), {
+        r.account_id for r in rows
+    }
 
 
 @translated
-async def retry_mail_changes(info: Info, changes: Optional[list[strawberry.ID]] = None, account: Optional[strawberry.ID] = None) -> list[types.MailChange]:
+async def retry_mail_changes(
+    info: Info,
+    changes: list[strawberry.ID] | None = None,
+    account: strawberry.ID | None = None,
+) -> list[types.MailChange]:
     """Queue FAILED changes again, due now: these `changes`, and every failed change of `account`."""
     rows, accounts = await database_sync_to_async(_retry)(info, changes, account)
     for account_id in accounts:
         await push_soon(account_id)
-    return [row async for row in models.MailChange.objects.filter(id__in=[r.id for r in rows])]  # type: ignore[return-value]
+    return [
+        row
+        async for row in models.MailChange.objects.filter(id__in=[r.id for r in rows])  # type: ignore[return-value]
+    ]
 
 
 async def _push_one(mailbox: models.MailAccount) -> types.PushResult:
     result = await push_account(mailbox.id)
-    pending = await models.MailChange.objects.filter(account=mailbox, state=models.MailChangeState.PENDING).acount()
-    failed = await models.MailChange.objects.filter(account=mailbox, state=models.MailChangeState.FAILED).acount()
-    return types.PushResult(account=mailbox, pushed=result.pushed if result else 0, pending=pending, failed=failed)  # type: ignore[arg-type]
+    pending = await models.MailChange.objects.filter(
+        account=mailbox, state=models.MailChangeState.PENDING
+    ).acount()
+    failed = await models.MailChange.objects.filter(
+        account=mailbox, state=models.MailChangeState.FAILED
+    ).acount()
+    return types.PushResult(
+        account=mailbox,  # type: ignore[arg-type]
+        pushed=result.pushed if result else 0,
+        pending=pending,
+        failed=failed,
+    )
 
 
 @translated
@@ -269,14 +372,23 @@ async def push_mail_changes(info: Info, account: strawberry.ID) -> types.PushRes
     return await _push_one(await aget_or_404(models.MailAccount, info, account))
 
 
-def _with_pending(info: Info, accounts: list[strawberry.ID] | None) -> list[models.MailAccount]:
+def _with_pending(
+    info: Info, accounts: list[strawberry.ID] | None
+) -> list[models.MailAccount]:
     if accounts is not None:
         return get_many(models.MailAccount, info, accounts)
-    pending = models.MailChange.objects.filter(state=models.MailChangeState.PENDING).values("account_id")
+    pending = models.MailChange.objects.filter(
+        state=models.MailChangeState.PENDING
+    ).values("account_id")
     return list(for_org(models.MailAccount, info).filter(id__in=pending).order_by("id"))
 
 
 @translated
-async def push_all_mail_changes(info: Info, accounts: Optional[list[strawberry.ID]] = None) -> list[types.PushResult]:
+async def push_all_mail_changes(
+    info: Info, accounts: list[strawberry.ID] | None = None
+) -> list[types.PushResult]:
     """Push the due changes of several mailboxes now, one after the other: these `accounts`, or every visible mailbox with pending changes."""
-    return [await _push_one(mailbox) for mailbox in await database_sync_to_async(_with_pending)(info, accounts)]
+    return [
+        await _push_one(mailbox)
+        for mailbox in await database_sync_to_async(_with_pending)(info, accounts)
+    ]

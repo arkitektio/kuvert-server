@@ -51,10 +51,48 @@ SPECIAL_USE = {
 }
 
 NAME_ROLES = {
-    models.FolderRole.SENT: {"sent", "sent items", "sent mail", "sent messages", "gesendet", "gesendete objekte", "gesendete elemente", "envoyés", "enviados", "inviata"},
-    models.FolderRole.DRAFTS: {"drafts", "draft", "entwürfe", "brouillons", "borradores", "bozze"},
-    models.FolderRole.TRASH: {"trash", "deleted", "deleted items", "deleted messages", "bin", "papierkorb", "gelöschte objekte", "gelöschte elemente", "corbeille", "papelera", "cestino"},
-    models.FolderRole.JUNK: {"junk", "spam", "junk e-mail", "junk email", "bulk mail", "spamverdacht", "courrier indésirable"},
+    models.FolderRole.SENT: {
+        "sent",
+        "sent items",
+        "sent mail",
+        "sent messages",
+        "gesendet",
+        "gesendete objekte",
+        "gesendete elemente",
+        "envoyés",
+        "enviados",
+        "inviata",
+    },
+    models.FolderRole.DRAFTS: {
+        "drafts",
+        "draft",
+        "entwürfe",
+        "brouillons",
+        "borradores",
+        "bozze",
+    },
+    models.FolderRole.TRASH: {
+        "trash",
+        "deleted",
+        "deleted items",
+        "deleted messages",
+        "bin",
+        "papierkorb",
+        "gelöschte objekte",
+        "gelöschte elemente",
+        "corbeille",
+        "papelera",
+        "cestino",
+    },
+    models.FolderRole.JUNK: {
+        "junk",
+        "spam",
+        "junk e-mail",
+        "junk email",
+        "bulk mail",
+        "spamverdacht",
+        "courrier indésirable",
+    },
     models.FolderRole.ARCHIVE: {"archive", "archives", "archiv", "all mail"},
 }
 
@@ -84,13 +122,17 @@ def guess_role(path: str, flags: tuple[bytes, ...], delimiter: str | None) -> st
     return models.FolderRole.OTHER
 
 
-def discover_folders(client: GuardedIMAPClient, account: models.MailAccount) -> list[models.MailFolder]:
+def discover_folders(
+    client: GuardedIMAPClient, account: models.MailAccount
+) -> list[models.MailFolder]:
     """Upsert the server's folders; drop (with their messages) the ones it no longer lists."""
     excluded = set(settings.KUVERT_SYNC.get("folders_excluded") or [])
     listed = client.list_folders()
     seen = set()
     for flags, delimiter, path in listed:
-        delimiter_text = delimiter.decode() if isinstance(delimiter, bytes) else delimiter
+        delimiter_text = (
+            delimiter.decode() if isinstance(delimiter, bytes) else delimiter
+        )
         path = path if isinstance(path, str) else path.decode()
         seen.add(path)
         role = guess_role(path, tuple(flags), delimiter_text)
@@ -99,32 +141,64 @@ def discover_folders(client: GuardedIMAPClient, account: models.MailAccount) -> 
         folder, created = models.MailFolder.objects.get_or_create(
             account=account,
             path=path,
-            defaults={"name": leaf, "delimiter": delimiter_text, "role": role, "selectable": selectable, "sync_enabled": role not in excluded},
+            defaults={
+                "name": leaf,
+                "delimiter": delimiter_text,
+                "role": role,
+                "selectable": selectable,
+                "sync_enabled": role not in excluded,
+            },
         )
-        if not created and (folder.role != role or folder.selectable != selectable or not folder.exists_on_server):
-            folder.role, folder.selectable, folder.exists_on_server = role, selectable, True
+        if not created and (
+            folder.role != role
+            or folder.selectable != selectable
+            or not folder.exists_on_server
+        ):
+            folder.role, folder.selectable, folder.exists_on_server = (
+                role,
+                selectable,
+                True,
+            )
             folder.save(update_fields=["role", "selectable", "exists_on_server"])
-    for gone in models.MailFolder.objects.filter(account=account).exclude(path__in=seen):
+    for gone in models.MailFolder.objects.filter(account=account).exclude(
+        path__in=seen
+    ):
         # Moves into it that never reached the server go back to where the server has the message.
-        for change in models.MailChange.objects.filter(target_folder=gone, kind=models.MailChangeKind.MOVE).exclude(origin_folder=gone):
+        for change in models.MailChange.objects.filter(
+            target_folder=gone, kind=models.MailChangeKind.MOVE
+        ).exclude(origin_folder=gone):
             if change.message_id and change.origin_folder_id:
-                models.Message.objects.filter(id=change.message_id).update(folder_id=change.origin_folder_id, uid=change.origin_uid, uidvalidity=change.origin_uidvalidity)
+                models.Message.objects.filter(id=change.message_id).update(
+                    folder_id=change.origin_folder_id,
+                    uid=change.origin_uid,
+                    uidvalidity=change.origin_uidvalidity,
+                )
                 overlay.recount([change.origin_folder_id])
             change.delete()
         delete(gone.messages.all())
         gone.delete()
-    return list(models.MailFolder.objects.filter(account=account, sync_enabled=True, selectable=True).order_by("id"))
+    return list(
+        models.MailFolder.objects.filter(
+            account=account, sync_enabled=True, selectable=True
+        ).order_by("id")
+    )
 
 
 def _flags(values: tuple) -> list[str]:
-    return [value.decode() if isinstance(value, bytes) else str(value) for value in values]
+    return [
+        value.decode() if isinstance(value, bytes) else str(value) for value in values
+    ]
 
 
-def _fetch_messages(client: GuardedIMAPClient, uids: list[int], uidvalidity: int) -> list[Fetched]:
+def _fetch_messages(
+    client: GuardedIMAPClient, uids: list[int], uidvalidity: int
+) -> list[Fetched]:
     """Fetch ``uids`` whole (BODY.PEEK, so they are not marked read) or, when too large, their headers."""
     limit = max_message_bytes()
     meta = client.fetch(uids, ["RFC822.SIZE", "INTERNALDATE", "FLAGS"])
-    small = [uid for uid in uids if uid in meta and meta[uid].get(b"RFC822.SIZE", 0) <= limit]
+    small = [
+        uid for uid in uids if uid in meta and meta[uid].get(b"RFC822.SIZE", 0) <= limit
+    ]
     large = [uid for uid in uids if uid in meta and uid not in small]
     bodies = client.fetch(small, ["BODY.PEEK[]"]) if small else {}
     headers = client.fetch(large, ["BODY.PEEK[HEADER]"]) if large else {}
@@ -133,29 +207,60 @@ def _fetch_messages(client: GuardedIMAPClient, uids: list[int], uidvalidity: int
         if uid not in meta:
             continue  # expunged meanwhile
         info = meta[uid]
-        raw = (bodies.get(uid) or {}).get(b"BODY[]") if uid in bodies else (headers.get(uid) or {}).get(b"BODY[HEADER]")
+        raw = (
+            (bodies.get(uid) or {}).get(b"BODY[]")
+            if uid in bodies
+            else (headers.get(uid) or {}).get(b"BODY[HEADER]")
+        )
         if raw is None:
             continue
         received = info.get(b"INTERNALDATE")
         if received is not None and received.tzinfo is None:
             received = received.replace(tzinfo=timezone.get_current_timezone())
-        out.append(Fetched(raw=raw, size=int(info.get(b"RFC822.SIZE", len(raw))), flags=_flags(info.get(b"FLAGS", ())), uid=uid, uidvalidity=uidvalidity, received_at=received, truncated=uid in large))
+        out.append(
+            Fetched(
+                raw=raw,
+                size=int(info.get(b"RFC822.SIZE", len(raw))),
+                flags=_flags(info.get(b"FLAGS", ())),
+                uid=uid,
+                uidvalidity=uidvalidity,
+                received_at=received,
+                truncated=uid in large,
+            )
+        )
     return out
 
 
-def _store(client: GuardedIMAPClient, account: models.MailAccount, folder: models.MailFolder, uids: list[int], uidvalidity: int, result: ImapResult) -> None:
+def _store(
+    client: GuardedIMAPClient,
+    account: models.MailAccount,
+    folder: models.MailFolder,
+    uids: list[int],
+    uidvalidity: int,
+    result: ImapResult,
+) -> None:
     from mail.sync import renew
 
     for start in range(0, len(uids), CHUNK):
         renew(account.id)  # a long first sync must not lose its lease halfway
         chunk = uids[start : start + CHUNK]
-        prepared = [prepare(account, fetched) for fetched in _fetch_messages(client, chunk, uidvalidity)]
+        prepared = [
+            prepare(account, fetched)
+            for fetched in _fetch_messages(client, chunk, uidvalidity)
+        ]
         created = write(account, folder, prepared)
         result.created += len(created)
         result.new_messages.extend(message.id for message in created)
 
 
-def _sync_flags(client: GuardedIMAPClient, folder: models.MailFolder, uidvalidity: int, condstore: bool, highest_modseq: int | None, stored: dict[int, int]) -> int:
+def _sync_flags(
+    client: GuardedIMAPClient,
+    folder: models.MailFolder,
+    uidvalidity: int,
+    condstore: bool,
+    highest_modseq: int | None,
+    stored: dict[int, int],
+) -> int:
     """Re-read the server's flags of stored messages (``server_flags``); returns how many changed."""
     if not stored:
         return 0
@@ -167,14 +272,38 @@ def _sync_flags(client: GuardedIMAPClient, folder: models.MailFolder, uidvalidit
         uids = sorted(stored)
         changed = {}
         for start in range(0, len(uids), FLAG_FETCH_CHUNK):
-            changed.update(client.fetch(uids[start : start + FLAG_FETCH_CHUNK], ["FLAGS"], modifiers=[f"CHANGEDSINCE {folder.highest_modseq}"]))
+            changed.update(
+                client.fetch(
+                    uids[start : start + FLAG_FETCH_CHUNK],
+                    ["FLAGS"],
+                    modifiers=[f"CHANGEDSINCE {folder.highest_modseq}"],
+                )
+            )
     else:
-        window = sorted(stored, reverse=True)[: int(settings.KUVERT_SYNC["flag_window"])]
+        window = sorted(stored, reverse=True)[
+            : int(settings.KUVERT_SYNC["flag_window"])
+        ]
         changed = client.fetch(window, ["FLAGS"]) if window else {}
-    by_uid = {uid: _flags(data.get(b"FLAGS", ())) for uid, data in changed.items() if uid in stored}
+    by_uid = {
+        uid: _flags(data.get(b"FLAGS", ()))
+        for uid, data in changed.items()
+        if uid in stored
+    }
     if not by_uid:
         return 0
-    rows = list(models.Message.objects.filter(folder=folder, uidvalidity=uidvalidity, uid__in=list(by_uid)).only("id", "uid", "account_id", "message_key", "flags", "server_flags", "category_ids"))
+    rows = list(
+        models.Message.objects.filter(
+            folder=folder, uidvalidity=uidvalidity, uid__in=list(by_uid)
+        ).only(
+            "id",
+            "uid",
+            "account_id",
+            "message_key",
+            "flags",
+            "server_flags",
+            "category_ids",
+        )
+    )
     dirty = []
     for row in rows:
         flags = by_uid[row.uid]
@@ -191,49 +320,103 @@ _LEAVING = (models.MailChangeKind.MOVE, models.MailChangeKind.EXPUNGE)
 
 def _leaving(folder: models.MailFolder, uidvalidity: int) -> set[int]:
     """UIDs a queued move or delete takes out of ``folder``: the server still has them there, not for long."""
-    return set(models.MailChange.objects.filter(origin_folder=folder, origin_uidvalidity=uidvalidity, kind__in=_LEAVING, state__in=overlay.OPEN_STATES).exclude(origin_uid=None).values_list("origin_uid", flat=True))
+    return set(
+        models.MailChange.objects.filter(
+            origin_folder=folder,
+            origin_uidvalidity=uidvalidity,
+            kind__in=_LEAVING,
+            state__in=overlay.OPEN_STATES,
+        )
+        .exclude(origin_uid=None)
+        .values_list("origin_uid", flat=True)
+    )
 
 
-def _relocate_leaving(client: GuardedIMAPClient, folder: models.MailFolder, uidvalidity: int) -> None:
+def _relocate_leaving(
+    client: GuardedIMAPClient, folder: models.MailFolder, uidvalidity: int
+) -> None:
     """After a UIDVALIDITY change: find the messages queued moves and deletes start from again, by Message-ID."""
-    for change in models.MailChange.objects.filter(origin_folder=folder, kind__in=_LEAVING, state__in=overlay.OPEN_STATES).exclude(origin_uidvalidity=uidvalidity):
+    for change in models.MailChange.objects.filter(
+        origin_folder=folder, kind__in=_LEAVING, state__in=overlay.OPEN_STATES
+    ).exclude(origin_uidvalidity=uidvalidity):
         uid = None
         if change.message_key and not change.message_key.startswith("h:"):
             found = client.search(["HEADER", "Message-ID", f"<{change.message_key}>"])
             uid = max(found) if found else None
-        models.MailChange.objects.filter(id=change.id).update(origin_uidvalidity=uidvalidity, origin_uid=uid)
+        models.MailChange.objects.filter(id=change.id).update(
+            origin_uidvalidity=uidvalidity, origin_uid=uid
+        )
 
 
-def sync_folder(client: GuardedIMAPClient, account: models.MailAccount, folder: models.MailFolder, result: ImapResult, condstore: bool) -> None:
+def sync_folder(
+    client: GuardedIMAPClient,
+    account: models.MailAccount,
+    folder: models.MailFolder,
+    result: ImapResult,
+    condstore: bool,
+) -> None:
     """One pass over one folder (see the module docstring)."""
     info = client.select_folder(folder.path, readonly=True)
     uidvalidity = int(info[b"UIDVALIDITY"])
-    highest_modseq = int(info[b"HIGHESTMODSEQ"]) if condstore and b"HIGHESTMODSEQ" in info else None
+    highest_modseq = (
+        int(info[b"HIGHESTMODSEQ"]) if condstore and b"HIGHESTMODSEQ" in info else None
+    )
     first = folder.uidvalidity != uidvalidity
     if first and folder.uidvalidity is not None:
-        logger.info("UIDVALIDITY of %s changed (%s → %s); resyncing it", folder.path, folder.uidvalidity, uidvalidity)
+        logger.info(
+            "UIDVALIDITY of %s changed (%s → %s); resyncing it",
+            folder.path,
+            folder.uidvalidity,
+            uidvalidity,
+        )
         # Rows already in the new epoch (a pushed move's COPYUID), waiting for a queued move (no
         # UID) or deleted here stay; the refetch adopts the ones without a valid UID.
-        result.deleted += delete(folder.messages.exclude(uid=None).exclude(uidvalidity=uidvalidity).filter(deleted_at=None).exclude(changes__kind=models.MailChangeKind.MOVE))
+        result.deleted += delete(
+            folder.messages.exclude(uid=None)
+            .exclude(uidvalidity=uidvalidity)
+            .filter(deleted_at=None)
+            .exclude(changes__kind=models.MailChangeKind.MOVE)
+        )
         _relocate_leaving(client, folder, uidvalidity)
     if first:
-        folder.uidvalidity, folder.last_uid, folder.oldest_uid, folder.backfill_done, folder.highest_modseq = uidvalidity, 0, None, False, None
+        (
+            folder.uidvalidity,
+            folder.last_uid,
+            folder.oldest_uid,
+            folder.backfill_done,
+            folder.highest_modseq,
+        ) = uidvalidity, 0, None, False, None
 
     leaving = _leaving(folder, uidvalidity)
     on_server = sorted(client.search("ALL"))
     server_set = set(on_server)
-    stored = dict(folder.messages.filter(uidvalidity=uidvalidity).exclude(uid=None).values_list("uid", "id"))
+    stored = dict(
+        folder.messages.filter(uidvalidity=uidvalidity)
+        .exclude(uid=None)
+        .values_list("uid", "id")
+    )
     gone = [uid for uid in stored if uid not in server_set]
     if gone:
-        result.deleted += delete(folder.messages.filter(uidvalidity=uidvalidity, uid__in=gone))
+        result.deleted += delete(
+            folder.messages.filter(uidvalidity=uidvalidity, uid__in=gone)
+        )
         for uid in gone:
             stored.pop(uid)
 
-    result.updated += _sync_flags(client, folder, uidvalidity, condstore, highest_modseq, stored)
+    result.updated += _sync_flags(
+        client, folder, uidvalidity, condstore, highest_modseq, stored
+    )
 
-    budget = min(int(settings.KUVERT_SYNC["batch_size"]), max(0, int(settings.KUVERT_SYNC["max_messages_per_run"]) - result.created))
+    budget = min(
+        int(settings.KUVERT_SYNC["batch_size"]),
+        max(0, int(settings.KUVERT_SYNC["max_messages_per_run"]) - result.created),
+    )
     if not first:
-        new = [uid for uid in on_server if uid > folder.last_uid and uid not in stored and uid not in leaving][:budget]
+        new = [
+            uid
+            for uid in on_server
+            if uid > folder.last_uid and uid not in stored and uid not in leaving
+        ][:budget]
         if new:
             _store(client, account, folder, new, uidvalidity, result)
             folder.last_uid = max(folder.last_uid, max(new))
@@ -245,12 +428,34 @@ def sync_folder(client: GuardedIMAPClient, account: models.MailAccount, folder: 
 
     if not folder.backfill_done:
         days = settings.KUVERT_SYNC.get("backfill_days")
-        window = server_set if not days else set(client.search(["SINCE", (timezone.now() - timedelta(days=int(days))).date()]))
-        pool = sorted((uid for uid in window if uid not in stored and uid not in leaving and (folder.oldest_uid is None or uid < folder.oldest_uid) and uid <= folder.last_uid), reverse=True)
+        window = (
+            server_set
+            if not days
+            else set(
+                client.search(
+                    ["SINCE", (timezone.now() - timedelta(days=int(days))).date()]
+                )
+            )
+        )
+        pool = sorted(
+            (
+                uid
+                for uid in window
+                if uid not in stored
+                and uid not in leaving
+                and (folder.oldest_uid is None or uid < folder.oldest_uid)
+                and uid <= folder.last_uid
+            ),
+            reverse=True,
+        )
         take = pool[: max(budget, 0)]
         if take:
             _store(client, account, folder, take, uidvalidity, result)
-            folder.oldest_uid = min(take) if folder.oldest_uid is None else min(folder.oldest_uid, min(take))
+            folder.oldest_uid = (
+                min(take)
+                if folder.oldest_uid is None
+                else min(folder.oldest_uid, min(take))
+            )
         if len(pool) > len(take):
             result.more = True
         else:
@@ -265,9 +470,15 @@ def sync_folder(client: GuardedIMAPClient, account: models.MailAccount, folder: 
     overlay.recount([folder.id])
 
 
-def sync(client: GuardedIMAPClient, account: models.MailAccount, folder_ids: list[int] | None = None) -> ImapResult:
+def sync(
+    client: GuardedIMAPClient,
+    account: models.MailAccount,
+    folder_ids: list[int] | None = None,
+) -> ImapResult:
     """Sync the mailbox's folders (or only ``folder_ids``) over a logged-in client."""
-    capabilities = sorted(cap.decode() if isinstance(cap, bytes) else cap for cap in client.capabilities())
+    capabilities = sorted(
+        cap.decode() if isinstance(cap, bytes) else cap for cap in client.capabilities()
+    )
     condstore = "CONDSTORE" in capabilities or "QRESYNC" in capabilities
     if condstore and "ENABLE" in capabilities:
         try:
@@ -276,7 +487,9 @@ def sync(client: GuardedIMAPClient, account: models.MailAccount, folder_ids: lis
             condstore = False
     if account.capabilities != capabilities:
         account.capabilities = capabilities
-        models.MailAccount.objects.filter(pk=account.pk).update(capabilities=capabilities)
+        models.MailAccount.objects.filter(pk=account.pk).update(
+            capabilities=capabilities
+        )
 
     result = ImapResult()
     folders = discover_folders(client, account)

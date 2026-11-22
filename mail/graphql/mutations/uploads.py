@@ -20,14 +20,24 @@ __all__ = ["finish_bigfile_upload"]
 
 
 def _mail_stores() -> Q:
-    return Q(id__in=models.Message.objects.exclude(raw=None).values("raw_id")) | Q(id__in=models.Attachment.objects.exclude(store=None).values("store_id"))
+    return Q(id__in=models.Message.objects.exclude(raw=None).values("raw_id")) | Q(
+        id__in=models.Attachment.objects.exclude(store=None).values("store_id")
+    )
 
 
-def finish_bigfile_upload(info: Info, input: datalayer_inputs.FinishBigFileUploadInput) -> datalayer_types.BigFileStore:
+def finish_bigfile_upload(
+    info: Info, input: datalayer_inputs.FinishBigFileUploadInput
+) -> datalayer_types.BigFileStore:
     """Mark the caller's uploaded store as populated after the client wrote the object."""
     request = info.context.request
     payload = input.to_pydantic()
-    own = BigFileStore.objects.filter(id=payload.store_id, organization=request.organization, creator=request.user).exclude(_mail_stores())
+    own = BigFileStore.objects.filter(
+        id=payload.store_id, organization=request.organization, creator=request.user
+    ).exclude(_mail_stores())
     if not own.exists():
         raise NotFound(f"BigFileStore {payload.store_id} does not exist.")
-    return get_current_datalayer().finish_bigfile_upload(request.organization.id, payload, user=request.user)  # type: ignore[return-value]
+    return get_current_datalayer().finish_bigfile_upload(
+        request.organization.id,
+        payload,
+        user=request.user,  # type: ignore[return-value]
+    )

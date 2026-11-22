@@ -22,7 +22,19 @@ ALLOWED_TAGS = {
     "sub", "summary", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time", "tr", "tt", "u", "ul", "var", "wbr",
 }  # fmt: skip
 
-_COMMON_ATTRIBUTES = {"style", "title", "dir", "lang", "align", "valign", "width", "height", "bgcolor", "color", "border"}
+_COMMON_ATTRIBUTES = {
+    "style",
+    "title",
+    "dir",
+    "lang",
+    "align",
+    "valign",
+    "width",
+    "height",
+    "bgcolor",
+    "color",
+    "border",
+}
 ALLOWED_ATTRIBUTES = {
     "*": _COMMON_ATTRIBUTES,
     "a": {"href", "name", "target"},
@@ -42,9 +54,14 @@ ALLOWED_ATTRIBUTES = {
 URL_SCHEMES = {"http", "https", "mailto", "tel", "cid", "data"}
 
 # Anything that can load a resource from CSS -- and any escape (``\75 rl(``), which could spell one.
-_CSS_URL = re.compile(r"url\s*\(|image-set|image\s*\(|src\s*\(|expression\s*\(|@import|behavior\s*:|-moz-binding|\\", re.IGNORECASE)
+_CSS_URL = re.compile(
+    r"url\s*\(|image-set|image\s*\(|src\s*\(|expression\s*\(|@import|behavior\s*:|-moz-binding|\\",
+    re.IGNORECASE,
+)
 _REMOTE = re.compile(r"^\s*(https?:)?//", re.IGNORECASE)
-_DATA_IMAGE = re.compile(r"^\s*data:image/(png|gif|jpe?g|webp|bmp);base64,", re.IGNORECASE)
+_DATA_IMAGE = re.compile(
+    r"^\s*data:image/(png|gif|jpe?g|webp|bmp);base64,", re.IGNORECASE
+)
 
 
 def _filter(block_remote: bool):  # noqa: ANN202
@@ -58,7 +75,11 @@ def _filter(block_remote: bool):  # noqa: ANN202
             if _REMOTE.match(value):
                 return None if block_remote else value
             return None
-        if element == "a" and attribute == "href" and value.strip().lower().startswith(("data:", "cid:")):
+        if (
+            element == "a"
+            and attribute == "href"
+            and value.strip().lower().startswith(("data:", "cid:"))
+        ):
             return None
         if element == "a" and attribute == "target":
             return "_blank"
@@ -74,7 +95,19 @@ def clean(html: str) -> str:
     return nh3.clean(
         html,
         tags=ALLOWED_TAGS,
-        clean_content_tags={"script", "style", "title", "head", "noscript", "template", "iframe", "object", "embed", "svg", "math"},
+        clean_content_tags={
+            "script",
+            "style",
+            "title",
+            "head",
+            "noscript",
+            "template",
+            "iframe",
+            "object",
+            "embed",
+            "svg",
+            "math",
+        },
         attributes=ALLOWED_ATTRIBUTES,
         attribute_filter=_filter(block_remote=False),
         url_schemes=URL_SCHEMES,
@@ -107,7 +140,23 @@ def has_remote_images(html: str) -> bool:
 
 
 class _TextExtractor(HTMLParser):
-    BLOCK = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "table", "hr"}
+    BLOCK = {
+        "p",
+        "div",
+        "br",
+        "tr",
+        "li",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "blockquote",
+        "pre",
+        "table",
+        "hr",
+    }
     SKIP = {"script", "style", "head", "title"}
 
     def __init__(self) -> None:

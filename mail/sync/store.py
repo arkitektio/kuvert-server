@@ -57,46 +57,89 @@ def prepare(account: models.MailAccount, fetched: Fetched) -> Prepared:
     try:
         parsed = parse_headers(fetched.raw) if fetched.truncated else parse(fetched.raw)
     except Exception:
-        logger.warning("Could not parse message uid=%s uidl=%s of mailbox %s; storing it bare.", fetched.uid, fetched.uidl, account.pk, exc_info=True)
+        logger.warning(
+            "Could not parse message uid=%s uidl=%s of mailbox %s; storing it bare.",
+            fetched.uid,
+            fetched.uidl,
+            account.pk,
+            exc_info=True,
+        )
         parsed = ParsedMessage()
     raw_store = None
     stores: list[object | None] = []
     if storage.enabled():
-        raw_store = storage.store_bytes(account.organization_id, account.creator_id, f"{parsed.message_id or 'message'}.eml", fetched.raw, "message/rfc822")
+        raw_store = storage.store_bytes(
+            account.organization_id,
+            account.creator_id,
+            f"{parsed.message_id or 'message'}.eml",
+            fetched.raw,
+            "message/rfc822",
+        )
         for attachment in parsed.attachments:
-            stores.append(storage.store_bytes(account.organization_id, account.creator_id, attachment.filename or f"attachment-{attachment.position}", attachment.payload, attachment.content_type))
+            stores.append(
+                storage.store_bytes(
+                    account.organization_id,
+                    account.creator_id,
+                    attachment.filename or f"attachment-{attachment.position}",
+                    attachment.payload,
+                    attachment.content_type,
+                )
+            )
     return Prepared(fetched, parsed, raw_store, stores)
 
 
-def write(account: models.MailAccount, folder: models.MailFolder, prepared: list[Prepared]) -> list[models.Message]:
+def write(
+    account: models.MailAccount, folder: models.MailFolder, prepared: list[Prepared]
+) -> list[models.Message]:
     """Create the rows of one chunk (attachments, threads) in one transaction; returns the new messages."""
     created: list[models.Message] = []
     adopted: list[models.Message] = []
     with transaction.atomic():
         for item in prepared:
             fetched, parsed = item.fetched, item.parsed
-            stores = [getattr(item.raw_store, "pk", None), *[getattr(s, "pk", None) for s in item.attachment_stores]]
+            stores = [
+                getattr(item.raw_store, "pk", None),
+                *[getattr(s, "pk", None) for s in item.attachment_stores],
+            ]
             existing = models.Message.objects.filter(folder=folder)
             if fetched.uidl is not None:
                 existing = existing.filter(uidl=fetched.uidl)
             else:
-                existing = existing.filter(uidvalidity=fetched.uidvalidity, uid=fetched.uid)
+                existing = existing.filter(
+                    uidvalidity=fetched.uidvalidity, uid=fetched.uid
+                )
             if existing.exists():
                 storage.orphan(stores)
                 continue
-            key = overlay.key_parts(parsed.message_id, parsed.sender_address[:320], parsed.date or fetched.received_at, parsed.subject[:10000], fetched.size)
+            key = overlay.key_parts(
+                parsed.message_id,
+                parsed.sender_address[:320],
+                parsed.date or fetched.received_at,
+                parsed.subject[:10000],
+                fetched.size,
+            )
             if fetched.uidl is None:
                 waiting = (
                     models.Message.objects.select_for_update(of=("self",))
                     .filter(folder=folder, message_key=key)
                     .filter(Q(uid__isnull=True) | ~Q(uidvalidity=fetched.uidvalidity))
-                    .exclude(changes__kind=models.MailChangeKind.MOVE)  # its move is still to be pushed
+                    .exclude(
+                        changes__kind=models.MailChangeKind.MOVE
+                    )  # its move is still to be pushed
                     .order_by("id")
                     .first()
                 )
                 if waiting is not None:
-                    waiting.uid, waiting.uidvalidity, waiting.server_flags = fetched.uid, fetched.uidvalidity, fetched.flags
-                    models.Message.objects.filter(id=waiting.id).update(uid=fetched.uid, uidvalidity=fetched.uidvalidity, server_flags=fetched.flags)
+                    waiting.uid, waiting.uidvalidity, waiting.server_flags = (
+                        fetched.uid,
+                        fetched.uidvalidity,
+                        fetched.flags,
+                    )
+                    models.Message.objects.filter(id=waiting.id).update(
+                        uid=fetched.uid,
+                        uidvalidity=fetched.uidvalidity,
+                        server_flags=fetched.flags,
+                    )
                     adopted.append(waiting)
                     storage.orphan(stores)
                     continue
@@ -141,7 +184,9 @@ def write(account: models.MailAccount, folder: models.MailFolder, prepared: list
                         size=attachment.size,
                         content_id=attachment.content_id,
                         inline=attachment.inline,
-                        store=item.attachment_stores[index] if index < len(item.attachment_stores) else None,
+                        store=item.attachment_stores[index]
+                        if index < len(item.attachment_stores)
+                        else None,
                     )
                     for index, attachment in enumerate(parsed.attachments)
                 ]
@@ -158,7 +203,11 @@ def delete(messages: "models.QuerySet[models.Message]") -> int:
     if not rows:
         return 0
     ids = [row[0] for row in rows]
-    store_ids = [row[2] for row in rows] + list(models.Attachment.objects.filter(message_id__in=ids).values_list("store_id", flat=True))
+    store_ids = [row[2] for row in rows] + list(
+        models.Attachment.objects.filter(message_id__in=ids).values_list(
+            "store_id", flat=True
+        )
+    )
     with transaction.atomic():
         models.Message.objects.filter(id__in=ids).delete()
         threads.refresh_many({row[1] for row in rows})

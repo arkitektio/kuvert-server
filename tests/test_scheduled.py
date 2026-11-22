@@ -3,10 +3,10 @@
 from datetime import timedelta
 
 import pytest
+from arkitekt_datalayer.models import BigFileStore
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
-from arkitekt_datalayer.models import BigFileStore
 from kuvert_server.hook_agent import agent
 from kuvert_server.service import service
 from mail import models
@@ -19,10 +19,18 @@ MINE, THEIRS = "static_issuer#static_org", "static_issuer#other_org"
 
 def test_actions_are_offered_and_wired_to_nothing(settings):
     actions = agent.actions
-    assert {"sync_all_mailboxes", "flush_mail_changes", "reembed_stale", "purge_orphaned_stores"} <= set(actions)
+    assert {
+        "sync_all_mailboxes",
+        "flush_mail_changes",
+        "reembed_stale",
+        "purge_orphaned_stores",
+    } <= set(actions)
     # An organization schedules them for itself, so each is handed the organization it runs for.
     assert all(action.takes_organization for action in actions.values())
-    assert all(set(action) == {"interface", "name", "description", "args"} for action in agent.manifest()["actions"])
+    assert all(
+        set(action) == {"interface", "name", "description", "args"}
+        for action in agent.manifest()["actions"]
+    )
 
 
 def test_the_service_and_the_agent_are_separate_declarations():
@@ -35,11 +43,15 @@ async def test_sync_all_mailboxes(mailbox, greenmail):
     greenmail.deliver(two["address"], "b")
     greenmail.wait_for(one["address"], 1)
     greenmail.wait_for(two["address"], 1)
-    await models.MailAccount.objects.filter(id=two["id"]).aupdate(status=models.MailAccountStatus.DISABLED)
+    await models.MailAccount.objects.filter(id=two["id"]).aupdate(
+        status=models.MailAccountStatus.DISABLED
+    )
     result = await sync_all_mailboxes(MINE)
     assert result == {"synced": 1, "skipped": 0, "failed": 0, "created": 1}
     # A mailbox a user is syncing right now is skipped, not failed.
-    await models.MailAccount.objects.filter(id=two["id"]).aupdate(status=models.MailAccountStatus.ACTIVE)
+    await models.MailAccount.objects.filter(id=two["id"]).aupdate(
+        status=models.MailAccountStatus.ACTIVE
+    )
     from mail.sync import claim
 
     assert await sync_to_async(claim)(int(two["id"]))
@@ -72,12 +84,27 @@ def _messages(box: dict):
 async def test_a_sync_for_one_organization_touches_only_its_mailboxes(boxes):
     mine, theirs = boxes
 
-    assert await sync_all_mailboxes("static_issuer#nobody") == {"synced": 0, "skipped": 0, "failed": 0, "created": 0}
-    assert await sync_all_mailboxes(THEIRS) == {"synced": 1, "skipped": 0, "failed": 0, "created": 1}
+    assert await sync_all_mailboxes("static_issuer#nobody") == {
+        "synced": 0,
+        "skipped": 0,
+        "failed": 0,
+        "created": 0,
+    }
+    assert await sync_all_mailboxes(THEIRS) == {
+        "synced": 1,
+        "skipped": 0,
+        "failed": 0,
+        "created": 1,
+    }
     assert await _messages(theirs).acount() == 1
     assert await _messages(mine).acount() == 0
 
-    assert await sync_all_mailboxes(MINE) == {"synced": 1, "skipped": 0, "failed": 0, "created": 1}
+    assert await sync_all_mailboxes(MINE) == {
+        "synced": 1,
+        "skipped": 0,
+        "failed": 0,
+        "created": 1,
+    }
     assert await _messages(mine).acount() == 1
 
 
@@ -99,11 +126,16 @@ async def test_a_purge_for_one_organization_deletes_only_its_stores(boxes, datal
     mine, theirs = boxes
     await sync_all_mailboxes(MINE)
     await sync_all_mailboxes(THEIRS)
-    my_raw, their_raw = (await _messages(mine).aget()).raw_id, (await _messages(theirs).aget()).raw_id
+    my_raw, their_raw = (
+        (await _messages(mine).aget()).raw_id,
+        (await _messages(theirs).aget()).raw_id,
+    )
     assert my_raw and their_raw
     # Both messages are gone for longer than the grace period.
     await models.Message.objects.all().adelete()
-    await BigFileStore.objects.filter(id__in=[my_raw, their_raw]).aupdate(orphaned_at=timezone.now() - timedelta(days=2))
+    await BigFileStore.objects.filter(id__in=[my_raw, their_raw]).aupdate(
+        orphaned_at=timezone.now() - timedelta(days=2)
+    )
 
     assert await purge_orphaned_stores(THEIRS) == {"purged": 1}
     assert not await BigFileStore.objects.filter(id=their_raw).aexists()

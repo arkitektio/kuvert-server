@@ -6,8 +6,8 @@ mail calls ``upsertTask`` with its own ``externalKey``, so sorting again updates
 duplicating; its links are recorded as source APP with the app's confidence and reason.
 """
 
+import builtins
 import datetime
-from typing import List, Optional
 
 import strawberry
 from django.db import transaction
@@ -50,83 +50,114 @@ __all__ = [
 class CreateTaskListInput:
     name: str
     color: str = ""
-    position: Optional[float] = strawberry.field(default=None, description="Where it sorts; after the last list by default.")
+    position: float | None = strawberry.field(
+        default=None, description="Where it sorts; after the last list by default."
+    )
 
 
-@strawberry.input(description="Changes to a task list; omitted fields stay as they are.")
+@strawberry.input(
+    description="Changes to a task list; omitted fields stay as they are."
+)
 class UpdateTaskListInput:
     id: strawberry.ID
-    name: Optional[str] = strawberry.UNSET
-    color: Optional[str] = strawberry.UNSET
-    position: Optional[float] = strawberry.UNSET
+    name: str | None = strawberry.UNSET
+    color: str | None = strawberry.UNSET
+    position: float | None = strawberry.UNSET
 
 
 @strawberry.input(description="How a conversation is put into a task.")
 class ThreadLinkInput:
-    source: enums.TaskLinkSource = strawberry.field(default=enums.TaskLinkSource.USER, description="APP when an app sorted it; USER when a person did.")
-    confidence: Optional[float] = strawberry.field(default=None, description="An app's confidence, 0–1.")
-    reason: str = strawberry.field(default="", description="Why the conversation belongs here.")
+    source: enums.TaskLinkSource = strawberry.field(
+        default=enums.TaskLinkSource.USER,
+        description="APP when an app sorted it; USER when a person did.",
+    )
+    confidence: float | None = strawberry.field(
+        default=None, description="An app's confidence, 0–1."
+    )
+    reason: str = strawberry.field(
+        default="", description="Why the conversation belongs here."
+    )
 
 
 @strawberry.input(description="A new task, optionally with its conversations.")
 class CreateTaskInput:
     title: str
     notes: str = ""
-    list: Optional[strawberry.ID] = None
-    due_at: Optional[datetime.datetime] = None
+    list: strawberry.ID | None = None
+    due_at: datetime.datetime | None = None
     pinned: bool = False
-    position: Optional[float] = strawberry.field(default=None, description="Where it sorts; after the last task by default.")
-    external_key: Optional[str] = strawberry.field(default=None, description="An app's own key; must be unique among the caller's tasks.")
-    threads: List[strawberry.ID] = strawberry.field(default_factory=lambda: [], description="Conversations to put into the task.")
-    link: Optional[ThreadLinkInput] = strawberry.field(default=None, description="How those conversations are linked.")
+    position: float | None = strawberry.field(
+        default=None, description="Where it sorts; after the last task by default."
+    )
+    external_key: str | None = strawberry.field(
+        default=None,
+        description="An app's own key; must be unique among the caller's tasks.",
+    )
+    threads: builtins.list[strawberry.ID] = strawberry.field(
+        default_factory=lambda: [], description="Conversations to put into the task."
+    )
+    link: ThreadLinkInput | None = strawberry.field(
+        default=None, description="How those conversations are linked."
+    )
 
 
-@strawberry.input(description="Create or update the caller's task with this `externalKey` (an app's idempotent sort call). Omitted fields keep their value on update; `threads` are added (never removed).")
+@strawberry.input(
+    description="Create or update the caller's task with this `externalKey` (an app's idempotent sort call). Omitted fields keep their value on update; `threads` are added (never removed)."
+)
 class UpsertTaskInput:
     external_key: str
     title: str
-    notes: Optional[str] = strawberry.UNSET
-    list: Optional[strawberry.ID] = strawberry.UNSET
-    due_at: Optional[datetime.datetime] = strawberry.UNSET
-    pinned: Optional[bool] = strawberry.UNSET
-    threads: List[strawberry.ID] = strawberry.field(default_factory=lambda: [])
-    link: Optional[ThreadLinkInput] = None
+    notes: str | None = strawberry.UNSET
+    list: strawberry.ID | None = strawberry.UNSET
+    due_at: datetime.datetime | None = strawberry.UNSET
+    pinned: bool | None = strawberry.UNSET
+    threads: builtins.list[strawberry.ID] = strawberry.field(default_factory=lambda: [])
+    link: ThreadLinkInput | None = None
 
 
 @strawberry.input(description="Changes to a task; omitted fields stay as they are.")
 class UpdateTaskInput:
     id: strawberry.ID
-    title: Optional[str] = strawberry.UNSET
-    notes: Optional[str] = strawberry.UNSET
-    list: Optional[strawberry.ID] = strawberry.field(default=strawberry.UNSET, description="Another list; null takes it off its list.")
-    due_at: Optional[datetime.datetime] = strawberry.UNSET
-    pinned: Optional[bool] = strawberry.UNSET
-    position: Optional[float] = strawberry.UNSET
+    title: str | None = strawberry.UNSET
+    notes: str | None = strawberry.UNSET
+    list: strawberry.ID | None = strawberry.field(
+        default=strawberry.UNSET,
+        description="Another list; null takes it off its list.",
+    )
+    due_at: datetime.datetime | None = strawberry.UNSET
+    pinned: bool | None = strawberry.UNSET
+    position: float | None = strawberry.UNSET
 
 
-@strawberry.input(description="Set the status of tasks (DONE records when; OPEN clears it).")
+@strawberry.input(
+    description="Set the status of tasks (DONE records when; OPEN clears it)."
+)
 class SetTaskStatusInput:
-    tasks: List[strawberry.ID]
+    tasks: list[strawberry.ID]
     status: enums.TaskStatus
 
 
-@strawberry.input(description="Hide tasks from the active view until a time; null wakes them now.")
+@strawberry.input(
+    description="Hide tasks from the active view until a time; null wakes them now."
+)
 class SnoozeTasksInput:
-    tasks: List[strawberry.ID]
-    until: Optional[datetime.datetime]
+    tasks: list[strawberry.ID]
+    until: datetime.datetime | None
 
 
-@strawberry.input(description="Put conversations into a task. A conversation already in it keeps its place; its link details are updated.")
+@strawberry.input(
+    description="Put conversations into a task. A conversation already in it keeps its place; its link details are updated."
+)
 class LinkThreadsInput:
     task: strawberry.ID
-    threads: List[strawberry.ID]
-    link: Optional[ThreadLinkInput] = None
+    threads: list[strawberry.ID]
+    link: ThreadLinkInput | None = None
 
 
 @strawberry.input(description="Take conversations out of a task.")
 class UnlinkThreadsInput:
     task: strawberry.ID
-    threads: List[strawberry.ID]
+    threads: list[strawberry.ID]
 
 
 def _next_position(rows: QuerySet) -> float:
@@ -134,11 +165,16 @@ def _next_position(rows: QuerySet) -> float:
     return (last or 0) + 1
 
 
-def _list(info: Info, value: Optional[strawberry.ID]) -> models.TaskList | None:
+def _list(info: Info, value: strawberry.ID | None) -> models.TaskList | None:
     return get_or_404(models.TaskList, info, value) if value is not None else None
 
 
-def _link(info: Info, task: models.Task, thread_ids: List[strawberry.ID], link: Optional[ThreadLinkInput]) -> List[models.TaskThread]:
+def _link(
+    info: Info,
+    task: models.Task,
+    thread_ids: list[strawberry.ID],
+    link: ThreadLinkInput | None,
+) -> list[models.TaskThread]:
     """Link visible conversations to ``task``; NOT_FOUND for any the caller cannot see."""
     link = link or ThreadLinkInput()
     if link.confidence is not None and not 0 <= link.confidence <= 1:
@@ -151,12 +187,23 @@ def _link(info: Info, task: models.Task, thread_ids: List[strawberry.ID], link: 
         row, created = models.TaskThread.objects.get_or_create(
             task=task,
             thread=thread,
-            defaults={"source": link.source.value, "client": client, "confidence": link.confidence, "reason": link.reason, "position": position},
+            defaults={
+                "source": link.source.value,
+                "client": client,
+                "confidence": link.confidence,
+                "reason": link.reason,
+                "position": position,
+            },
         )
         if created:
             position += 1
         else:
-            row.source, row.client, row.confidence, row.reason = link.source.value, client, link.confidence, link.reason
+            row.source, row.client, row.confidence, row.reason = (
+                link.source.value,
+                client,
+                link.confidence,
+                link.reason,
+            )
             row.save(update_fields=["source", "client", "confidence", "reason"])
         out.append(row)
     return out
@@ -175,8 +222,18 @@ def create_task_list(info: Info, input: CreateTaskListInput) -> types.TaskList:
     request = info.context.request
     if not input.name.strip():
         raise ValidationError("A list needs a name.")
-    position = input.position if input.position is not None else _next_position(for_org(models.TaskList, info))
-    return models.TaskList.objects.create(organization=request.organization, owner=request.user, name=input.name.strip()[:200], color=input.color[:20], position=position)  # type: ignore[return-value]
+    position = (
+        input.position
+        if input.position is not None
+        else _next_position(for_org(models.TaskList, info))
+    )
+    return models.TaskList.objects.create(
+        organization=request.organization,
+        owner=request.user,
+        name=input.name.strip()[:200],
+        color=input.color[:20],
+        position=position,
+    )  # type: ignore[return-value]
 
 
 @translated
@@ -206,8 +263,15 @@ def create_task(info: Info, input: CreateTaskInput) -> types.Task:
     request = info.context.request
     with transaction.atomic():
         task_list = _list(info, input.list)
-        if input.external_key and for_org(models.Task, info).filter(external_key=input.external_key).exists():
-            raise ValidationError("You already have a task with this externalKey; use upsertTask.")
+        if (
+            input.external_key
+            and for_org(models.Task, info)
+            .filter(external_key=input.external_key)
+            .exists()
+        ):
+            raise ValidationError(
+                "You already have a task with this externalKey; use upsertTask."
+            )
         task = models.Task.objects.create(
             organization=request.organization,
             owner=request.user,
@@ -216,7 +280,9 @@ def create_task(info: Info, input: CreateTaskInput) -> types.Task:
             notes=input.notes,
             due_at=input.due_at,
             pinned=input.pinned,
-            position=input.position if input.position is not None else _next_position(for_org(models.Task, info).filter(list=task_list)),
+            position=input.position
+            if input.position is not None
+            else _next_position(for_org(models.Task, info).filter(list=task_list)),
             external_key=input.external_key or None,
             client=getattr(request, "client", None),
         )
@@ -232,15 +298,24 @@ def upsert_task(info: Info, input: UpsertTaskInput) -> types.Task:
     if not key:
         raise ValidationError("externalKey must not be empty.")
     with transaction.atomic():
-        task = for_org(models.Task, info).select_for_update().filter(external_key=key).first()
+        task = (
+            for_org(models.Task, info)
+            .select_for_update()
+            .filter(external_key=key)
+            .first()
+        )
         if task is None:
-            task_list = _list(info, input.list) if input.list is not strawberry.UNSET else None
+            task_list = (
+                _list(info, input.list) if input.list is not strawberry.UNSET else None
+            )
             task = models.Task(
                 organization=request.organization,
                 owner=request.user,
                 external_key=key,
                 list=task_list,
-                position=_next_position(for_org(models.Task, info).filter(list=task_list)),
+                position=_next_position(
+                    for_org(models.Task, info).filter(list=task_list)
+                ),
                 client=getattr(request, "client", None),
             )
         task.title = _check_title(input.title)
@@ -285,19 +360,23 @@ def delete_task(info: Info, id: strawberry.ID) -> strawberry.ID:
 
 
 @translated
-def set_task_status(info: Info, input: SetTaskStatusInput) -> List[types.Task]:
+def set_task_status(info: Info, input: SetTaskStatusInput) -> list[types.Task]:
     """Mark tasks OPEN, DONE or DISMISSED. No mail changes."""
     tasks = get_many(models.Task, info, input.tasks)
     now = timezone.now()
     for task in tasks:
         task.status = input.status.value
-        task.completed_at = (task.completed_at or now) if input.status == enums.TaskStatus.DONE else None
+        task.completed_at = (
+            (task.completed_at or now)
+            if input.status == enums.TaskStatus.DONE
+            else None
+        )
         task.save(update_fields=["status", "completed_at", "updated_at"])
     return tasks  # type: ignore[return-value]
 
 
 @translated
-def snooze_tasks(info: Info, input: SnoozeTasksInput) -> List[types.Task]:
+def snooze_tasks(info: Info, input: SnoozeTasksInput) -> list[types.Task]:
     """Hide tasks from the active view until `until` (null: wake them now)."""
     tasks = get_many(models.Task, info, input.tasks)
     for task in tasks:
@@ -307,7 +386,7 @@ def snooze_tasks(info: Info, input: SnoozeTasksInput) -> List[types.Task]:
 
 
 @translated
-def link_threads(info: Info, input: LinkThreadsInput) -> List[types.TaskThread]:
+def link_threads(info: Info, input: LinkThreadsInput) -> list[types.TaskThread]:
     """Put conversations the caller can see into their task."""
     task = get_or_404(models.Task, info, input.task)
     with transaction.atomic():
@@ -320,7 +399,11 @@ def unlink_threads(info: Info, input: UnlinkThreadsInput) -> types.Task:
     from mail import threads as thread_module
 
     task = get_or_404(models.Task, info, input.task)
-    removed = set(models.TaskThread.objects.filter(task=task, thread_id__in=input.threads).values_list("thread_id", flat=True))
+    removed = set(
+        models.TaskThread.objects.filter(
+            task=task, thread_id__in=input.threads
+        ).values_list("thread_id", flat=True)
+    )
     models.TaskThread.objects.filter(task=task, thread_id__in=removed).delete()
     # A conversation kept only for its task (its messages gone) can go now.
     thread_module.refresh_many(removed)

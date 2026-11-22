@@ -21,7 +21,12 @@ query($account: ID!) {
 async def test_first_sync_reads_inbox(mailbox, greenmail, sync, aexecute):
     box = await mailbox()
     greenmail.deliver(box["address"], "First", "Hello first")
-    greenmail.deliver(box["address"], "Second", "Hello second", attachments=[("a.pdf", "application/pdf", b"%PDF-1.4 data")])
+    greenmail.deliver(
+        box["address"],
+        "Second",
+        "Hello second",
+        attachments=[("a.pdf", "application/pdf", b"%PDF-1.4 data")],
+    )
     greenmail.wait_for(box["address"], 2)
 
     result = await sync(box["id"])
@@ -32,7 +37,14 @@ async def test_first_sync_reads_inbox(mailbox, greenmail, sync, aexecute):
     assert {m["subject"] for m in messages} == {"First", "Second"}
     second = next(m for m in messages if m["subject"] == "Second")
     assert second["hasAttachments"] is True
-    assert second["attachments"] == [{"filename": "a.pdf", "contentType": "application/pdf", "size": 13, "inline": False}]
+    assert second["attachments"] == [
+        {
+            "filename": "a.pdf",
+            "contentType": "application/pdf",
+            "size": 13,
+            "inline": False,
+        }
+    ]
     assert second["sender"] == {"name": "Alice Sender", "address": "alice@example.org"}
     assert second["folder"] == {"path": "INBOX", "role": "INBOX"}
     assert second["isRead"] is False  # fetched with BODY.PEEK
@@ -59,18 +71,31 @@ async def test_backfill_in_batches(mailbox, greenmail, sync, settings):
     greenmail.wait_for(box["address"], 7)
 
     first = await sync(box["id"])
-    assert (first["created"], first["more"], first["account"]["backfillDone"]) == (3, True, False)
+    assert (first["created"], first["more"], first["account"]["backfillDone"]) == (
+        3,
+        True,
+        False,
+    )
     # Newest first: the first batch holds the three newest.
     subjects = set(await _subjects(box["id"]))
     assert subjects == {"Mail 4", "Mail 5", "Mail 6"}
     second = await sync(box["id"])
     assert second["created"] == 3 and second["more"] is True
     third = await sync(box["id"])
-    assert third["created"] == 1 and third["more"] is False and third["account"]["backfillDone"] is True
+    assert (
+        third["created"] == 1
+        and third["more"] is False
+        and third["account"]["backfillDone"] is True
+    )
 
 
 async def _subjects(account_id: str) -> list[str]:
-    return [s async for s in models.Message.objects.filter(account_id=account_id).values_list("subject", flat=True)]
+    return [
+        s
+        async for s in models.Message.objects.filter(account_id=account_id).values_list(
+            "subject", flat=True
+        )
+    ]
 
 
 async def test_flags_and_expunges_follow_the_server(mailbox, greenmail, sync):
@@ -100,11 +125,24 @@ async def test_folders_are_discovered_with_roles(mailbox, greenmail, sync, aexec
         imap.create_folder("Sent")
         imap.create_folder("Trash")
         imap.create_folder("Receipts")
-        imap.append("Receipts", b"From: shop@example.org\r\nSubject: Receipt\r\nMessage-ID: <r1@example.org>\r\n\r\nThanks\r\n")
+        imap.append(
+            "Receipts",
+            b"From: shop@example.org\r\nSubject: Receipt\r\nMessage-ID: <r1@example.org>\r\n\r\nThanks\r\n",
+        )
     result = await sync(box["id"])
     assert result["folders"] == 4 and result["created"] == 1
-    folders = (await aexecute('query($a: ID!) { mailFolders(filters: {account: $a}) { path role totalCount } }', {"a": box["id"]})).data["mailFolders"]
-    assert {(f["path"], f["role"]) for f in folders} == {("INBOX", "INBOX"), ("Sent", "SENT"), ("Trash", "TRASH"), ("Receipts", "OTHER")}
+    folders = (
+        await aexecute(
+            "query($a: ID!) { mailFolders(filters: {account: $a}) { path role totalCount } }",
+            {"a": box["id"]},
+        )
+    ).data["mailFolders"]
+    assert {(f["path"], f["role"]) for f in folders} == {
+        ("INBOX", "INBOX"),
+        ("Sent", "SENT"),
+        ("Trash", "TRASH"),
+        ("Receipts", "OTHER"),
+    }
 
 
 async def test_uidvalidity_change_resyncs_the_folder(mailbox, greenmail, sync):
@@ -124,7 +162,12 @@ async def test_uidvalidity_change_resyncs_the_folder(mailbox, greenmail, sync):
     await sync(box["id"])
     folder = await models.MailFolder.objects.aget(account_id=box["id"], path="Box")
     rows = [m async for m in models.Message.objects.filter(folder=folder)]
-    assert await models.Message.objects.filter(folder__path="Old", account_id=box["id"]).acount() == 1
+    assert (
+        await models.Message.objects.filter(
+            folder__path="Old", account_id=box["id"]
+        ).acount()
+        == 1
+    )
     assert folder.uidvalidity != old_validity
     assert sorted(m.subject for m in rows) == ["one", "two"]
     assert old_id not in {m.id for m in rows}
@@ -134,21 +177,37 @@ async def test_uidvalidity_change_resyncs_the_folder(mailbox, greenmail, sync):
 async def test_threads_join_replies(mailbox, greenmail, sync, aexecute):
     box = await mailbox()
     root = greenmail.deliver(box["address"], "Plans", "Shall we?")
-    greenmail.deliver(box["address"], "Re: Plans", "Yes", in_reply_to=root, references=[root])
+    greenmail.deliver(
+        box["address"], "Re: Plans", "Yes", in_reply_to=root, references=[root]
+    )
     greenmail.deliver(box["address"], "Other", "Unrelated")
     greenmail.wait_for(box["address"], 3)
     await sync(box["id"])
-    threads = (await aexecute('query($a: ID!) { threads(filters: {account: $a}) { subject messageCount messages { subject } } }', {"a": box["id"]})).data["threads"]
-    assert sorted((t["subject"], t["messageCount"]) for t in threads) == [("other", 1), ("plans", 2)]
+    threads = (
+        await aexecute(
+            "query($a: ID!) { threads(filters: {account: $a}) { subject messageCount messages { subject } } }",
+            {"a": box["id"]},
+        )
+    ).data["threads"]
+    assert sorted((t["subject"], t["messageCount"]) for t in threads) == [
+        ("other", 1),
+        ("plans", 2),
+    ]
 
 
 async def test_one_run_is_capped_over_all_folders(mailbox, greenmail, sync, settings):
-    settings.KUVERT_SYNC = {**django_settings.KUVERT_SYNC, "batch_size": 5, "max_messages_per_run": 4}
+    settings.KUVERT_SYNC = {
+        **django_settings.KUVERT_SYNC,
+        "batch_size": 5,
+        "max_messages_per_run": 4,
+    }
     box = await mailbox()
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Other")
         for n in range(3):
-            imap.append("Other", f"Subject: o{n}\r\nMessage-ID: <o{n}@x>\r\n\r\n.\r\n".encode())
+            imap.append(
+                "Other", f"Subject: o{n}\r\nMessage-ID: <o{n}@x>\r\n\r\n.\r\n".encode()
+            )
     for n in range(3):
         greenmail.deliver(box["address"], f"i{n}")
     greenmail.wait_for(box["address"], 3)
@@ -164,7 +223,15 @@ async def test_junk_is_discovered_but_not_synced(mailbox, greenmail, sync, aexec
         imap.create_folder("Spam")
         imap.append("Spam", b"Subject: buy now\r\nMessage-ID: <spam@x>\r\n\r\n.\r\n")
     assert (await sync(box["id"]))["created"] == 0
-    spam = (await aexecute('query($a: ID!) { mailFolders(filters: {account: $a, role: JUNK}) { id syncEnabled } }', {"a": box["id"]})).data["mailFolders"][0]
+    spam = (
+        await aexecute(
+            "query($a: ID!) { mailFolders(filters: {account: $a, role: JUNK}) { id syncEnabled } }",
+            {"a": box["id"]},
+        )
+    ).data["mailFolders"][0]
     assert spam["syncEnabled"] is False
-    await aexecute('mutation($id: ID!) { updateMailFolder(input: {id: $id, syncEnabled: true}) { id } }', {"id": spam["id"]})
+    await aexecute(
+        "mutation($id: ID!) { updateMailFolder(input: {id: $id, syncEnabled: true}) { id } }",
+        {"id": spam["id"]},
+    )
     assert (await sync(box["id"]))["created"] == 1

@@ -24,7 +24,16 @@ import secrets
 
 from aiohttp import web
 
-STATE: dict = {"clients": {}, "codes": {}, "refresh": {}, "revoked": set(), "config": {"expires_in": 3600, "rotate_refresh": False}, "log": [], "hold": asyncio.Event(), "held": 0}
+STATE: dict = {
+    "clients": {},
+    "codes": {},
+    "refresh": {},
+    "revoked": set(),
+    "config": {"expires_in": 3600, "rotate_refresh": False},
+    "log": [],
+    "hold": asyncio.Event(),
+    "held": 0,
+}
 STATE["hold"].set()
 
 
@@ -37,14 +46,29 @@ def _id_token(email: str, name: str) -> str:
 
 
 def _error(kind: str, description: str, status: int = 400) -> web.Response:
-    return web.json_response({"error": kind, "error_description": description}, status=status)
+    return web.json_response(
+        {"error": kind, "error_description": description}, status=status
+    )
 
 
-def _grant(email: str, name: str, access_token: str, scope: str, with_refresh: bool = True) -> dict:
-    body = {"access_token": access_token, "token_type": "Bearer", "expires_in": STATE["config"]["expires_in"], "scope": scope, "id_token": _id_token(email, name)}
+def _grant(
+    email: str, name: str, access_token: str, scope: str, with_refresh: bool = True
+) -> dict:
+    body = {
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": STATE["config"]["expires_in"],
+        "scope": scope,
+        "id_token": _id_token(email, name),
+    }
     if with_refresh:
         refresh = secrets.token_urlsafe(24)
-        STATE["refresh"][refresh] = {"email": email, "name": name, "access_token": access_token, "scope": scope}
+        STATE["refresh"][refresh] = {
+            "email": email,
+            "name": name,
+            "access_token": access_token,
+            "scope": scope,
+        }
         body["refresh_token"] = refresh
     return body
 
@@ -60,19 +84,32 @@ async def token(request: web.Request) -> web.Response:
         finally:
             STATE["held"] -= 1
     client = STATE["clients"].get(client_id)
-    if client is None or (client.get("client_secret") and client["client_secret"] != secret):
+    if client is None or (
+        client.get("client_secret") and client["client_secret"] != secret
+    ):
         return _error("invalid_client", "Unknown client or wrong secret.", 401)
     if form.get("grant_type") == "authorization_code":
         code = STATE["codes"].pop(form.get("code", ""), None)
         if code is None:
             return _error("invalid_grant", "Unknown or used code.")
-        if code["client_id"] != client_id or code["redirect_uri"] != form.get("redirect_uri"):
-            return _error("invalid_grant", "The code was issued to another client or redirect URI.")
+        if code["client_id"] != client_id or code["redirect_uri"] != form.get(
+            "redirect_uri"
+        ):
+            return _error(
+                "invalid_grant",
+                "The code was issued to another client or redirect URI.",
+            )
         verifier = form.get("code_verifier", "")
-        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        challenge = (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            .rstrip(b"=")
+            .decode()
+        )
         if challenge != code["code_challenge"]:
             return _error("invalid_grant", "PKCE verification failed.")
-        return web.json_response(_grant(code["email"], code["name"], code["access_token"], code["scope"]))
+        return web.json_response(
+            _grant(code["email"], code["name"], code["access_token"], code["scope"])
+        )
     if form.get("grant_type") == "refresh_token":
         refresh = form.get("refresh_token", "")
         grant = STATE["refresh"].get(refresh)
@@ -81,9 +118,17 @@ async def token(request: web.Request) -> web.Response:
         rotate = STATE["config"]["rotate_refresh"]
         if rotate:
             STATE["refresh"].pop(refresh)
-        body = _grant(grant["email"], grant["name"], grant["access_token"], grant["scope"], with_refresh=rotate)
+        body = _grant(
+            grant["email"],
+            grant["name"],
+            grant["access_token"],
+            grant["scope"],
+            with_refresh=rotate,
+        )
         return web.json_response(body)
-    return _error("unsupported_grant_type", "Only authorization_code and refresh_token.")
+    return _error(
+        "unsupported_grant_type", "Only authorization_code and refresh_token."
+    )
 
 
 async def clients(request: web.Request) -> web.Response:

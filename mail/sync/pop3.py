@@ -36,7 +36,11 @@ class Pop3Result:
 
 def inbox(account: models.MailAccount) -> models.MailFolder:
     """The one folder of a POP3 mailbox."""
-    folder, _ = models.MailFolder.objects.get_or_create(account=account, path="INBOX", defaults={"name": "INBOX", "role": models.FolderRole.INBOX})
+    folder, _ = models.MailFolder.objects.get_or_create(
+        account=account,
+        path="INBOX",
+        defaults={"name": "INBOX", "role": models.FolderRole.INBOX},
+    )
     return folder
 
 
@@ -59,7 +63,9 @@ def sync(client: GuardedPOP3, account: models.MailAccount) -> Pop3Result:
     capabilities = pop3_capabilities(client)
     if account.capabilities != capabilities:
         account.capabilities = capabilities
-        models.MailAccount.objects.filter(pk=account.pk).update(capabilities=capabilities)
+        models.MailAccount.objects.filter(pk=account.pk).update(
+            capabilities=capabilities
+        )
 
     folder = inbox(account)
     result = Pop3Result()
@@ -71,8 +77,13 @@ def sync(client: GuardedPOP3, account: models.MailAccount) -> Pop3Result:
         if gone:
             result.deleted += delete(folder.messages.filter(uidl__in=list(gone)))
 
-    budget = min(int(settings.KUVERT_SYNC["batch_size"]), int(settings.KUVERT_SYNC["max_messages_per_run"]))
-    new = [number for number in sorted(uidls, reverse=True) if uidls[number] not in stored]
+    budget = min(
+        int(settings.KUVERT_SYNC["batch_size"]),
+        int(settings.KUVERT_SYNC["max_messages_per_run"]),
+    )
+    new = [
+        number for number in sorted(uidls, reverse=True) if uidls[number] not in stored
+    ]
     take, result.more = new[:budget], len(new) > budget
     limit = max_message_bytes()
     downloaded: list[int] = []
@@ -90,7 +101,15 @@ def sync(client: GuardedPOP3, account: models.MailAccount) -> Pop3Result:
             else:
                 _, lines, _ = client.top(number, 0)
                 truncated = True
-            fetched.append(Fetched(raw=b"\r\n".join(lines) + b"\r\n", size=size, flags=[], uidl=uidls[number], truncated=truncated))
+            fetched.append(
+                Fetched(
+                    raw=b"\r\n".join(lines) + b"\r\n",
+                    size=size,
+                    flags=[],
+                    uidl=uidls[number],
+                    truncated=truncated,
+                )
+            )
         created = write(account, folder, [prepare(account, item) for item in fetched])
         result.created += len(created)
         result.new_messages.extend(message.id for message in created)

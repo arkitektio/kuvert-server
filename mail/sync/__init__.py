@@ -16,10 +16,10 @@ request that queued a change) takes the same lease.
 """
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Iterator
 
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
@@ -66,7 +66,9 @@ def claim(account_id: int) -> bool:
 def renew(account_id: int) -> None:
     """Extend the lease of a sync that is still running (it holds the lease, so nobody else does)."""
     lease = int(settings.KUVERT_SYNC["lease_seconds"])
-    models.MailAccount.objects.filter(id=account_id).update(sync_lease_until=timezone.now() + timedelta(seconds=lease))
+    models.MailAccount.objects.filter(id=account_id).update(
+        sync_lease_until=timezone.now() + timedelta(seconds=lease)
+    )
 
 
 def release(account_id: int) -> None:
@@ -90,21 +92,34 @@ def begin(account_id: int) -> None:
 def record_failure(account_id: int, error: BaseException) -> None:
     """Remember why the sync failed; credentials that stopped working set NEEDS_REAUTH."""
     code = code_for(error)
-    updates = {"last_error": str(error)[:2000] or type(error).__name__, "last_error_code": code}
+    updates = {
+        "last_error": str(error)[:2000] or type(error).__name__,
+        "last_error_code": code,
+    }
     if code in (models.MailErrorCode.AUTH_FAILED, models.MailErrorCode.CONSENT_EXPIRED):
         updates["status"] = models.MailAccountStatus.NEEDS_REAUTH
     models.MailAccount.objects.filter(id=account_id).update(**updates)
 
 
 def _mark_synced(account_id: int) -> None:
-    backfill_done = not models.MailFolder.objects.filter(account_id=account_id, sync_enabled=True, selectable=True, backfill_done=False).exists()
-    models.MailAccount.objects.filter(id=account_id).update(last_synced_at=timezone.now(), last_error=None, last_error_code=None, backfill_done=backfill_done)
+    backfill_done = not models.MailFolder.objects.filter(
+        account_id=account_id, sync_enabled=True, selectable=True, backfill_done=False
+    ).exists()
+    models.MailAccount.objects.filter(id=account_id).update(
+        last_synced_at=timezone.now(),
+        last_error=None,
+        last_error_code=None,
+        backfill_done=backfill_done,
+    )
 
 
 @contextmanager
 def incoming_session(account: models.MailAccount) -> Iterator[object]:
     """A logged-in client of the mailbox's incoming server (IMAP or POP3), logged out afterwards."""
-    endpoint, credentials = accounts.incoming_endpoint(account), accounts.incoming_credentials(account)
+    endpoint, credentials = (
+        accounts.incoming_endpoint(account),
+        accounts.incoming_credentials(account),
+    )
     if account.protocol == models.Protocol.POP3:
         client = open_pop3(endpoint, credentials)
         try:
@@ -163,7 +178,9 @@ def push_now(account_id: int) -> SyncResult | None:
     """Push the mailbox's due changes now (blocking), if it is active, has some, and no sync holds it; else None."""
     from mail import push
 
-    account = models.MailAccount.objects.filter(id=account_id, status=models.MailAccountStatus.ACTIVE).first()
+    account = models.MailAccount.objects.filter(
+        id=account_id, status=models.MailAccountStatus.ACTIVE
+    ).first()
     if account is None or not push.has_due(account_id) or not claim(account_id):
         return None
     try:
@@ -177,8 +194,15 @@ def push_now(account_id: int) -> SyncResult | None:
     finally:
         release(account_id)
     if account.last_error_code:
-        models.MailAccount.objects.filter(id=account_id).update(last_error=None, last_error_code=None)
-    return SyncResult(account_id=account_id, organization_id=account.organization_id, pushed=pushed.pushed, touched_folders=sorted(pushed.touched_folders))
+        models.MailAccount.objects.filter(id=account_id).update(
+            last_error=None, last_error_code=None
+        )
+    return SyncResult(
+        account_id=account_id,
+        organization_id=account.organization_id,
+        pushed=pushed.pushed,
+        touched_folders=sorted(pushed.touched_folders),
+    )
 
 
 def _back_off(account_id: int) -> None:
@@ -187,7 +211,9 @@ def _back_off(account_id: int) -> None:
     never answered)."""
     now = timezone.now()
     wait = timedelta(seconds=int(settings.KUVERT_WRITEBACK["backoff_base_seconds"]))
-    models.MailChange.objects.filter(account_id=account_id, state=models.MailChangeState.PENDING, push_after__lte=now).update(push_after=now + wait)
+    models.MailChange.objects.filter(
+        account_id=account_id, state=models.MailChangeState.PENDING, push_after__lte=now
+    ).update(push_after=now + wait)
 
 
 def in_worker(fn, *args, **kwargs):  # noqa: ANN001, ANN201
@@ -202,7 +228,9 @@ def in_worker(fn, *args, **kwargs):  # noqa: ANN001, ANN201
     return sync_to_async(call, thread_sensitive=False)()
 
 
-async def sync_account(account_id: int, folder_ids: list[int] | None = None) -> SyncResult:
+async def sync_account(
+    account_id: int, folder_ids: list[int] | None = None
+) -> SyncResult:
     """Sync a mailbox now: claim it, run one pass, record the outcome, tell subscribers."""
     from mail.channels import broadcast_sync
 
@@ -215,9 +243,17 @@ async def sync_account(account_id: int, folder_ids: list[int] | None = None) -> 
         raise
     finally:
         await database_sync_to_async(release)(account_id)
-    logger.info("Synced mailbox %s: %s new, %s updated, %s deleted", account_id, result.created, result.updated, result.deleted)
+    logger.info(
+        "Synced mailbox %s: %s new, %s updated, %s deleted",
+        account_id,
+        result.created,
+        result.updated,
+        result.deleted,
+    )
     await database_sync_to_async(broadcast_sync)(result)
-    await database_sync_to_async(announce_changes)(account_id, result.pushed)  # a sync pushes, resolves and fails changes too
+    await database_sync_to_async(announce_changes)(
+        account_id, result.pushed
+    )  # a sync pushes, resolves and fails changes too
     return result
 
 
@@ -234,7 +270,9 @@ async def _push(account_id: int) -> SyncResult | None:
 async def push_account(account_id: int) -> SyncResult | None:
     """:func:`push_now` in a worker; subscribers hear of what it moved and where the queue stands."""
     result = await _push(account_id)
-    if result is not None:  # None: nothing was due, or a sync holds the mailbox (and announces itself)
+    if (
+        result is not None
+    ):  # None: nothing was due, or a sync holds the mailbox (and announces itself)
         await database_sync_to_async(announce_changes)(account_id, result.pushed)
     return result
 
@@ -249,5 +287,9 @@ async def push_soon(account_id: int) -> None:
         try:
             result = await _push(account_id)
         except Exception as error:  # recorded on the mailbox; the change stays queued
-            logger.info("Pushing changes of mailbox %s right away failed: %s", account_id, error)
-    await database_sync_to_async(announce_changes)(account_id, result.pushed if result else 0)
+            logger.info(
+                "Pushing changes of mailbox %s right away failed: %s", account_id, error
+            )
+    await database_sync_to_async(announce_changes)(
+        account_id, result.pushed if result else 0
+    )

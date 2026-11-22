@@ -10,7 +10,7 @@ import email.utils
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email import policy
 from email.message import EmailMessage, Message
 
@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 SNIPPET_CHARS = 200
 _MSGID = re.compile(r"<([^<>\s]+)>")
-_PREFIX = re.compile(r"^\s*((re|fw|fwd|aw|wg|sv|vs|antw|tr|rif|r)(\[\d+\])?\s*:\s*)+", re.IGNORECASE)
+_PREFIX = re.compile(
+    r"^\s*((re|fw|fwd|aw|wg|sv|vs|antw|tr|rif|r)(\[\d+\])?\s*:\s*)+", re.IGNORECASE
+)
 
 
 @dataclass
@@ -84,7 +86,9 @@ def _header(msg: Message, name: str) -> str:
     try:
         value = msg.get(name)
     except Exception:  # a header the policy cannot parse
-        value = msg.get_all(name, failobj=[None])[0] if hasattr(msg, "get_all") else None
+        value = (
+            msg.get_all(name, failobj=[None])[0] if hasattr(msg, "get_all") else None
+        )
     return str(value).strip() if value is not None else ""
 
 
@@ -108,7 +112,7 @@ def _date(msg: Message) -> datetime | None:
     if parsed is None:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -117,10 +121,18 @@ def _text(part: Message) -> str:
         return part.get_content()  # type: ignore[attr-defined]
     except (LookupError, UnicodeError, AttributeError, KeyError, AssertionError):
         payload = part.get_payload(decode=True) or b""
-        return payload.decode(part.get_content_charset() or "utf-8", errors="replace") if isinstance(payload, bytes) else str(payload)
+        return (
+            payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            if isinstance(payload, bytes)
+            else str(payload)
+        )
     except Exception:
         payload = part.get_payload(decode=True) or b""
-        return payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else str(payload)
+        return (
+            payload.decode("utf-8", errors="replace")
+            if isinstance(payload, bytes)
+            else str(payload)
+        )
 
 
 def _body_parts(msg: EmailMessage) -> tuple[Message | None, Message | None]:

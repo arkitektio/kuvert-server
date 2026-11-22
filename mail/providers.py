@@ -17,7 +17,6 @@ NOT_CONFIGURED wherever its credentials would be used (:func:`usable`).
 
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -36,17 +35,30 @@ class Server(BaseModel):
 class ServerProviderSettings(BaseModel):
     """An IMAP provider: its servers, or none (each member names their own)."""
 
-    protocol: Optional[models.Protocol] = Field(default=None, description="How incoming mail is read, with fixed servers.")
-    incoming: Optional[Server] = Field(default=None, description="The fixed IMAP or POP3 server; None leaves the servers to the members.")
-    smtp: Optional[Server] = Field(default=None, description="The fixed SMTP server; None with fixed servers: its mailboxes cannot send.")
-    save_sent_copy: bool = Field(default=True, description="Whether its mailboxes append sent mail to Sent (off when the server files it itself).")
+    protocol: models.Protocol | None = Field(
+        default=None, description="How incoming mail is read, with fixed servers."
+    )
+    incoming: Server | None = Field(
+        default=None,
+        description="The fixed IMAP or POP3 server; None leaves the servers to the members.",
+    )
+    smtp: Server | None = Field(
+        default=None,
+        description="The fixed SMTP server; None with fixed servers: its mailboxes cannot send.",
+    )
+    save_sent_copy: bool = Field(
+        default=True,
+        description="Whether its mailboxes append sent mail to Sent (off when the server files it itself).",
+    )
 
     @model_validator(mode="after")
     def _fixed_together(self) -> "ServerProviderSettings":
         if (self.protocol is None) != (self.incoming is None):
             raise ValueError("fixed servers need both `protocol` and `incoming`")
         if self.smtp is not None and self.incoming is None:
-            raise ValueError("an SMTP server is only fixed together with the incoming one")
+            raise ValueError(
+                "an SMTP server is only fixed together with the incoming one"
+            )
         return self
 
     @property
@@ -62,8 +74,14 @@ class OAuthProviderSettings(BaseModel):
     """A Gmail or Microsoft provider: one OAuth client. Its secret is stored apart, encrypted."""
 
     client_id: str = Field(min_length=1, description="The OAuth client id.")
-    redirect_urls: list[str] = Field(min_length=1, description="The redirect URLs registered for the client; the first is the default.")
-    tenant: str = Field(default="common", description="Microsoft: the Entra tenant (id or domain) logins go through; `common` takes any account.")
+    redirect_urls: list[str] = Field(
+        min_length=1,
+        description="The redirect URLs registered for the client; the first is the default.",
+    )
+    tenant: str = Field(
+        default="common",
+        description="Microsoft: the Entra tenant (id or domain) logins go through; `common` takes any account.",
+    )
 
     @field_validator("tenant")
     @classmethod
@@ -93,8 +111,16 @@ class CapabilityInfo:
 CAPABILITIES: dict[models.ProviderCapability, CapabilityInfo] = {
     info.capability: info
     for info in (
-        CapabilityInfo(models.ProviderCapability.SEND, "Sending", "Send mail through its mailboxes' SMTP servers; off, they only receive."),
-        CapabilityInfo(models.ProviderCapability.SCHEDULED_SYNC, "Scheduled sync", "Let the unattended `sync_all_mailboxes` action sync its mailboxes; off, they only sync when a member asks."),
+        CapabilityInfo(
+            models.ProviderCapability.SEND,
+            "Sending",
+            "Send mail through its mailboxes' SMTP servers; off, they only receive.",
+        ),
+        CapabilityInfo(
+            models.ProviderCapability.SCHEDULED_SYNC,
+            "Scheduled sync",
+            "Let the unattended `sync_all_mailboxes` action sync its mailboxes; off, they only sync when a member asks.",
+        ),
     )
 }
 
@@ -116,9 +142,30 @@ _ALL = frozenset(CAPABILITIES)
 KINDS: dict[models.Provider, Kind] = {
     kind.kind: kind
     for kind in (
-        Kind(models.Provider.GENERIC, "IMAP / POP3", "A mail server members log in to with a username and (app) password: fixed by the admin, or named by each member.", models.AuthMethod.PASSWORD, _ALL, ServerProviderSettings),
-        Kind(models.Provider.GMAIL, "Gmail", "Gmail and Google Workspace through a Google Cloud OAuth client.", models.AuthMethod.XOAUTH2, _ALL, OAuthProviderSettings),
-        Kind(models.Provider.MICROSOFT, "Microsoft", "Outlook.com and Microsoft 365 through an Entra app registration.", models.AuthMethod.XOAUTH2, _ALL, OAuthProviderSettings),
+        Kind(
+            models.Provider.GENERIC,
+            "IMAP / POP3",
+            "A mail server members log in to with a username and (app) password: fixed by the admin, or named by each member.",
+            models.AuthMethod.PASSWORD,
+            _ALL,
+            ServerProviderSettings,
+        ),
+        Kind(
+            models.Provider.GMAIL,
+            "Gmail",
+            "Gmail and Google Workspace through a Google Cloud OAuth client.",
+            models.AuthMethod.XOAUTH2,
+            _ALL,
+            OAuthProviderSettings,
+        ),
+        Kind(
+            models.Provider.MICROSOFT,
+            "Microsoft",
+            "Outlook.com and Microsoft 365 through an Entra app registration.",
+            models.AuthMethod.XOAUTH2,
+            _ALL,
+            OAuthProviderSettings,
+        ),
     )
 }
 
@@ -136,7 +183,9 @@ def server_settings(provider: models.MailProvider) -> ServerProviderSettings:
 
 def oauth_settings(provider: models.MailProvider) -> OAuthProviderSettings:
     """A Gmail or Microsoft provider's settings."""
-    assert kind_of(provider.kind).auth_method == models.AuthMethod.XOAUTH2, provider.kind
+    assert kind_of(provider.kind).auth_method == models.AuthMethod.XOAUTH2, (
+        provider.kind
+    )
     return OAuthProviderSettings.model_validate(provider.settings)
 
 
@@ -145,18 +194,33 @@ def has(provider: models.MailProvider, capability: models.ProviderCapability) ->
     return capability.value in (provider.capabilities or [])
 
 
-def usable(provider: models.MailProvider | None, what: str = "This mailbox") -> models.MailProvider:
+def usable(
+    provider: models.MailProvider | None, what: str = "This mailbox"
+) -> models.MailProvider:
     """``provider``, if it may be used: NOT_CONFIGURED when there is none or it is disabled."""
     if provider is None:
-        raise MailError(f"{what} has no provider: an admin of the organization has to set one up (again).", models.MailErrorCode.NOT_CONFIGURED)
+        raise MailError(
+            f"{what} has no provider: an admin of the organization has to set one up (again).",
+            models.MailErrorCode.NOT_CONFIGURED,
+        )
     if not provider.enabled:
-        raise MailError(f"The provider {provider.name!r} is disabled.", models.MailErrorCode.NOT_CONFIGURED)
+        raise MailError(
+            f"The provider {provider.name!r} is disabled.",
+            models.MailErrorCode.NOT_CONFIGURED,
+        )
     return provider
 
 
-def require(provider: models.MailProvider | None, capability: models.ProviderCapability, what: str = "This mailbox") -> models.MailProvider:
+def require(
+    provider: models.MailProvider | None,
+    capability: models.ProviderCapability,
+    what: str = "This mailbox",
+) -> models.MailProvider:
     """:func:`usable`, and NOT_CONFIGURED unless ``capability`` is switched on."""
     row = usable(provider, what)
     if not has(row, capability):
-        raise MailError(f"{CAPABILITIES[capability].label} is switched off for the provider {row.name!r}.", models.MailErrorCode.NOT_CONFIGURED)
+        raise MailError(
+            f"{CAPABILITIES[capability].label} is switched off for the provider {row.name!r}.",
+            models.MailErrorCode.NOT_CONFIGURED,
+        )
     return row
