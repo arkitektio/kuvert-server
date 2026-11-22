@@ -13,7 +13,7 @@ from channels.db import database_sync_to_async
 from kante.errors import ValidationError
 from kante.types import Info
 
-from mail import changes, models, types
+from mail import changes, enums, models, types
 from mail.channels import announce_changes
 from mail.graphql.errors import translated
 from mail.graphql.utils import aget_or_404, get_many, get_or_404
@@ -55,10 +55,11 @@ class MarkMessagesInput:
     read: bool = True
 
 
-@strawberry.input(description="Move messages to another folder of their mailbox.")
+@strawberry.input(description="Move messages to another folder of their mailbox: one `folder`, or each message's own mailbox's folder of a `role` (Archive, Junk, ...).")
 class MoveMessagesInput:
     messages: list[strawberry.ID]
-    folder: strawberry.ID
+    folder: Optional[strawberry.ID] = None
+    role: Optional[enums.FolderRole] = strawberry.field(default=None, description="Instead of `folder`: the folder of this role in each message's mailbox (messages of several mailboxes move at once).")
 
 
 @strawberry.input(description="Delete messages: into Trash, or for good.")
@@ -130,16 +131,36 @@ async def mark_messages_read(info: Info, input: MarkMessagesInput) -> list[types
     return await _flags(info, input.messages, add, remove)  # type: ignore[return-value]
 
 
+def _role_folders(groups: dict[int, tuple[models.MailAccount, list[models.Message]]], role: enums.FolderRole) -> dict[int, models.MailFolder]:
+    """Each mailbox's folder of ``role`` that can hold mail; a mailbox without one is refused."""
+    found: dict[int, models.MailFolder] = {}
+    for folder in models.MailFolder.objects.filter(account_id__in=list(groups), role=role.value, selectable=True, exists_on_server=True).order_by("account_id", "id"):
+        found.setdefault(folder.account_id, folder)
+    for account_id, (account, _) in groups.items():
+        if account_id not in found:
+            raise ValidationError(f"{account.email_address} has no {role.value.title()} folder.")
+    return found
+
+
 @translated
 async def move_messages(info: Info, input: MoveMessagesInput) -> list[types.Message]:
     """Move messages to another folder of their mailbox (IMAP only): here at once, keeping their ids; the server follows after the undo window."""
-    folder = await database_sync_to_async(get_or_404)(models.MailFolder, info, input.folder)
+    if (input.folder is None) == (input.role is None):
+        raise ValidationError("Give either a folder or a role.")
     groups = await database_sync_to_async(_load)(info, input.messages)
-    if set(groups) - {folder.account_id}:
-        raise ValidationError("Messages can only be moved within their own mailbox.")
-    account, messages = groups[folder.account_id]
-    moved = await database_sync_to_async(changes.move)(account, messages, folder, _user(info))
-    await push_soon(account.id)
+    if input.folder is not None:
+        folder = await database_sync_to_async(get_or_404)(models.MailFolder, info, input.folder)
+        if set(groups) - {folder.account_id}:
+            raise ValidationError("Messages can only be moved within their own mailbox.")
+        targets = {folder.account_id: folder}
+    else:
+        assert input.role is not None
+        targets = await database_sync_to_async(_role_folders)(groups, input.role)
+    moved: list[models.Message] = []
+    for account_id, (account, messages) in groups.items():
+        moved += await database_sync_to_async(changes.move)(account, messages, targets[account_id], _user(info))
+    for account_id in groups:
+        await push_soon(account_id)
     return moved  # type: ignore[return-value]
 
 

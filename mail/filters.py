@@ -221,6 +221,11 @@ class MessageFilter:
         return Q(**{f"{prefix}thread_id": value})
 
     @strawberry_django.filter_field
+    def threads(self, value: list[strawberry.ID], prefix: str) -> Q:
+        """Only messages of these conversations: every mail of several conversations in one request."""
+        return _ids(prefix, "thread_id", value)
+
+    @strawberry_django.filter_field
     def unread(self, value: bool, prefix: str) -> Q:
         """Only unread (true) or read (false) messages."""
         q = Q(**{f"{prefix}flags__contains": ["\\Seen"]})
@@ -527,6 +532,7 @@ class TaskFilter:
 class TaskOrder:
     """Ordering options for tasks."""
 
+    pinned: auto
     position: auto
     due_at: auto
     created_at: auto

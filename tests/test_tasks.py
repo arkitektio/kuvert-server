@@ -88,6 +88,14 @@ async def test_status_snooze_pin_and_active_view(inbox, aexecute):
     assert (await aexecute(TASKS, {"f": {"active": True}})).data["tasksCount"] == 3
 
 
+async def test_pinned_order_spans_pages(inbox, aexecute):
+    """Pinned first is the server's order, so a pinned task past the first page still leads it."""
+    ids = [(await aexecute(UPSERT, {"input": {"externalKey": f"t{i}", "title": f"t{i}"}})).data["upsertTask"]["id"] for i in range(4)]
+    await aexecute('mutation($id: ID!) { updateTask(input: {id: $id, pinned: true}) { pinned } }', {"id": ids[3]})
+    page = 'query { tasks(ordering: [{pinned: DESC}, {createdAt: ASC}], pagination: {limit: 2}) { title pinned } }'
+    assert (await aexecute(page)).data["tasks"] == [{"title": "t3", "pinned": True}, {"title": "t0", "pinned": False}]
+
+
 async def test_lists(inbox, aexecute):
     travel = (await aexecute('mutation { createTaskList(input: {name: "Travel", color: "#4f86f7"}) { id } }')).data["createTaskList"]["id"]
     task = (await aexecute('mutation($l: ID!) { createTask(input: {title: "Pack", list: $l}) { id list { name } } }', {"l": travel})).data["createTask"]

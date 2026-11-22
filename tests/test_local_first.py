@@ -126,6 +126,29 @@ async def test_a_move_keeps_its_id_and_can_be_undone(box, aexecute, greenmail, s
     assert set(server(greenmail, box["address"], "Archive")) == set()
 
 
+async def test_a_move_by_role_finds_the_mailbox_folder(box, aexecute, writeback):
+    """`role` moves each message into its own mailbox's folder of that role; a mailbox without one is refused."""
+    writeback(push_inline=False)
+    await models.MailFolder.objects.filter(id=box["folders"]["Archive"]).aupdate(role=models.FolderRole.ARCHIVE)
+    by_role = 'mutation($ids: [ID!]!, $r: FolderRole) { moveMessages(input: {messages: $ids, role: $r}) { id folder { path } } }'
+    one, two = box["messages"]["One"], box["messages"]["Two"]
+    moved = (await aexecute(by_role, {"ids": [one, two], "r": "ARCHIVE"})).data["moveMessages"]
+    assert sorted(m["id"] for m in moved) == sorted([one, two]) and {m["folder"]["path"] for m in moved} == {"Archive"}
+
+    refused = await aexecute(by_role, {"ids": [box["messages"]["Three"]], "r": "JUNK"}, allow_errors=True)
+    assert refused.errors and "no Junk folder" in refused.errors[0].message
+    both = await aexecute('mutation($ids: [ID!]!, $f: ID) { moveMessages(input: {messages: $ids, folder: $f, role: ARCHIVE}) { id } }', {"ids": [one], "f": box["folders"]["INBOX"]}, allow_errors=True)
+    assert both.errors and "either a folder or a role" in both.errors[0].message
+
+
+async def test_threads_filter_lists_every_mail_of_several_conversations(box, aexecute):
+    threads = {str(m.thread_id): str(m.id) async for m in models.Message.objects.filter(account_id=box["id"])}
+    assert len(threads) == 3
+    picked = list(threads)[:2]
+    found = (await aexecute('query($t: [ID!]) { messages(filters: {threads: $t}) { id } }', {"t": picked})).data["messages"]
+    assert sorted(m["id"] for m in found) == sorted(threads[t] for t in picked)
+
+
 async def test_a_move_pushed_by_a_crashed_run_is_not_pushed_twice(box, aexecute, greenmail, sync, writeback):
     """The server has the move (the answer was lost): the retry finds the message in the target and adopts it."""
     writeback(push_inline=False)
