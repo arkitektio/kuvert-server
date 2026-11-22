@@ -10,6 +10,7 @@ Inline images keep their ``cid:`` references; a client resolves them through the
 """
 
 import re
+from collections.abc import Callable
 from html import unescape
 from html.parser import HTMLParser
 
@@ -64,7 +65,7 @@ _DATA_IMAGE = re.compile(
 )
 
 
-def _filter(block_remote: bool):  # noqa: ANN202
+def _filter(block_remote: bool) -> Callable[[str, str, str], str | None]:
     def attribute_filter(element: str, attribute: str, value: str) -> str | None:
         if attribute == "style":
             # CSS can load remote resources (background: url(…)) and has no business doing so here.
@@ -164,7 +165,7 @@ class _TextExtractor(HTMLParser):
         self.parts: list[str] = []
         self.skipping = 0
 
-    def handle_starttag(self, tag: str, attrs: list) -> None:  # noqa: ANN001
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in self.SKIP:
             self.skipping += 1
         elif tag in self.BLOCK:

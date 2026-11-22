@@ -8,6 +8,7 @@ from kante.context import HttpContext, UniversalRequest
 from strawberry.http.temporal_response import TemporalResponse
 
 from kuvert_server.schema import schema
+from tests.conftest import Stack
 
 MAKE_TASK_LIST = 'mutation { createTaskList(input: {name: "Scoped"}) { id } }'
 TASK_LISTS = "query { taskLists { id } }"
@@ -26,12 +27,14 @@ def _reason(result) -> str | None:  # noqa: ANN001
     return result.errors[0].extensions.get("reason") if result.errors else None
 
 
-def test_every_root_field_asks_for_a_scope_kuvert_declares():
+def test_every_root_field_asks_for_a_scope_kuvert_declares() -> None:
     assert scope_gaps(schema) == []
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_an_app_granted_reads_reads_and_writes_nothing(backend_stack):
+async def test_an_app_granted_reads_reads_and_writes_nothing(
+    backend_stack: Stack,
+) -> None:
     assert (
         await schema.execute(TASK_LISTS, context_value=_as("readertest"))
     ).errors is None
@@ -40,6 +43,6 @@ async def test_an_app_granted_reads_reads_and_writes_nothing(backend_stack):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_all_scope_writes(backend_stack):
+async def test_the_all_scope_writes(backend_stack: Stack) -> None:
     made = await schema.execute(MAKE_TASK_LIST, context_value=_as("test"))
     assert made.errors is None, made.errors

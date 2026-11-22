@@ -3,9 +3,12 @@
 from datetime import UTC, datetime
 
 import pytest
+from kante.context import HttpContext
 
 from mail import models
 from mail.sync import sync_account
+from tests.conftest import GreenMail
+from tests.support import AExecute, Data, Mailbox, Sync
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -23,7 +26,7 @@ query($f: ThreadFilter) {
 
 
 @pytest.fixture
-async def conversation(mailbox, greenmail, sync):
+async def conversation(mailbox: Mailbox, greenmail: GreenMail, sync: Sync) -> Data:
     """Plans: a question from Anna in INBOX, Ben's answer, and the owner's reply in Sent. Plus an unrelated mail."""
     box = await mailbox()
     root = greenmail.deliver(
@@ -62,7 +65,7 @@ async def conversation(mailbox, greenmail, sync):
     return {**box, "plans": str(plans.id)}
 
 
-async def test_rows(conversation, aexecute):
+async def test_rows(conversation: Data, aexecute: AExecute) -> None:
     data = (await aexecute(ROWS, {"f": {"account": conversation["id"]}})).data
     assert data["threadsCount"] == 2
     plans, lunch = data["threads"]
@@ -96,7 +99,12 @@ async def test_rows(conversation, aexecute):
         ({"unread": False}, []),
     ],
 )
-async def test_filters(conversation, aexecute, filters, expected):
+async def test_filters(
+    conversation: Data,
+    aexecute: AExecute,
+    filters: dict[str, object],
+    expected: list[str],
+) -> None:
     data = (
         await aexecute(ROWS, {"f": {"account": conversation["id"], **filters}})
     ).data
@@ -104,7 +112,9 @@ async def test_filters(conversation, aexecute, filters, expected):
     assert data["threadsCount"] == len(expected)
 
 
-async def test_ids_filter_and_folder_scoped_latest(conversation, aexecute):
+async def test_ids_filter_and_folder_scoped_latest(
+    conversation: Data, aexecute: AExecute
+) -> None:
     sent = await models.MailFolder.objects.aget(
         account_id=conversation["id"], role="SENT"
     )
@@ -117,14 +127,16 @@ async def test_ids_filter_and_folder_scoped_latest(conversation, aexecute):
     ]
 
 
-async def test_counts_respect_visibility(conversation, aexecute, colleague_context):
+async def test_counts_respect_visibility(
+    conversation: Data, aexecute: AExecute, colleague_context: HttpContext
+) -> None:
     assert (
         await aexecute("{ threadsCount messagesCount }", context=colleague_context)
     ).data == {"threadsCount": 0, "messagesCount": 0}
     assert (await aexecute("{ messagesCount }")).data["messagesCount"] == 4
 
 
-async def test_mail_account_search(mailbox, aexecute):
+async def test_mail_account_search(mailbox: Mailbox, aexecute: AExecute) -> None:
     work = await mailbox(name="Work inbox")
     await mailbox(name="Private")
     found = (await aexecute('{ mailAccounts(filters: {search: "work"}) { id } }')).data[
@@ -140,7 +152,9 @@ async def test_mail_account_search(mailbox, aexecute):
     assert by_address == [{"id": work["id"]}]
 
 
-async def test_sync_reports_touched_folders(mailbox, greenmail, sync):
+async def test_sync_reports_touched_folders(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync
+) -> None:
     box = await mailbox()
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Quiet")

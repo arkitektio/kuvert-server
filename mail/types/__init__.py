@@ -2,14 +2,14 @@
 and, within it, only the mailboxes the caller may see."""
 
 import datetime
-from typing import List, Optional
+from typing import Any, Optional
 
 import kante
 import strawberry
 import strawberry_django
 from arkitekt_datalayer import types as datalayer_types
 from django.conf import settings
-from django.db.models import F
+from django.db.models import F, QuerySet
 from django.utils import timezone
 from kante.types import Info
 from strawberry.scalars import JSON
@@ -17,6 +17,7 @@ from strawberry.scalars import JSON
 from mail import enums, filters, models, sanitize
 from mail.types._shared import (
     DESCRIPTORS_DESCRIPTION,
+    ModelT,
     OrgScoped,
     build_prescoped_queryset,
     resolve_descriptors,
@@ -477,7 +478,9 @@ class Message(OrgScoped):
     )
 
     @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):  # noqa: ANN001, ANN206
+    def get_queryset(
+        cls, queryset: QuerySet[ModelT], info: Info, **kwargs: Any
+    ) -> QuerySet[ModelT]:
         return build_prescoped_queryset(info, queryset).filter(deleted_at=None)
 
     @strawberry_django.field(description="The categories the message is in.")
@@ -568,7 +571,7 @@ def _thread_messages(
     info: Info,
     folder: strawberry.ID | None = None,
     folder_role: enums.FolderRole | None = None,
-):  # noqa: ANN202
+) -> QuerySet[models.Message]:
     """The conversation's messages the caller may see, optionally within a folder or a folder role."""
     from mail.scoping import scope_queryset
 
@@ -1014,7 +1017,7 @@ class PushResult:
     failed: int = strawberry.field(description="Changes that did not reach the server.")
 
 
-def _visible_links(task: object, info: Info):  # noqa: ANN202
+def _visible_links(task: object, info: Info) -> QuerySet[models.TaskThread]:
     """The task's links whose thread the caller can still see."""
     from mail.scoping import scope_queryset
 

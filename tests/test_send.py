@@ -6,6 +6,8 @@ from email import policy
 import pytest
 
 from mail import models
+from tests.conftest import GreenMail
+from tests.support import AExecute, Mailbox, Sync, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -16,7 +18,7 @@ mutation($input: SendMessageInput!) {
 """
 
 
-def _inbox(greenmail, address: str) -> list[email.message.EmailMessage]:
+def _inbox(greenmail: GreenMail, address: str) -> list[email.message.EmailMessage]:
     with greenmail.imap(address) as imap:
         imap.select_folder("INBOX", readonly=True)
         return [
@@ -25,7 +27,9 @@ def _inbox(greenmail, address: str) -> list[email.message.EmailMessage]:
         ]
 
 
-async def test_send_delivers_and_saves_a_copy(mailbox, greenmail, aexecute):
+async def test_send_delivers_and_saves_a_copy(
+    mailbox: Mailbox, greenmail: GreenMail, aexecute: AExecute
+) -> None:
     box = await mailbox(displayName="Me Myself")
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Sent")
@@ -54,7 +58,7 @@ async def test_send_delivers_and_saves_a_copy(mailbox, greenmail, aexecute):
     greenmail.wait_for(friend, 1)
     [received] = _inbox(greenmail, friend)
     assert received["Subject"] == "Hi"
-    assert received["From"] == "Me Myself <%s>" % box["address"]
+    assert received["From"] == f"Me Myself <{box['address']}>"
     assert received["Message-ID"].strip("<>") == sent["messageId"]
     assert "Bcc" not in received
     assert received.get_body(("plain",)).get_content().strip() == "Hello friend"
@@ -66,7 +70,9 @@ async def test_send_delivers_and_saves_a_copy(mailbox, greenmail, aexecute):
     assert outbox == [{"id": sent["id"], "status": "SENT"}]
 
 
-async def test_reply_threads_and_answers(mailbox, greenmail, aexecute, sync):
+async def test_reply_threads_and_answers(
+    mailbox: Mailbox, greenmail: GreenMail, aexecute: AExecute, sync: Sync
+) -> None:
     box = await mailbox(saveSentCopy=False)
     original = greenmail.deliver(
         box["address"], "Question", "Can you?", sender=f"Asker <{greenmail.user()}>"
@@ -100,7 +106,9 @@ async def test_reply_threads_and_answers(mailbox, greenmail, aexecute, sync):
     assert "\\Answered" in message.flags
 
 
-async def test_refusals_come_back_failed_not_raised(mailbox, aexecute):
+async def test_refusals_come_back_failed_not_raised(
+    mailbox: Mailbox, aexecute: AExecute
+) -> None:
     box = await mailbox()
     bad = await aexecute(
         SEND,
@@ -113,11 +121,11 @@ async def test_refusals_come_back_failed_not_raised(mailbox, aexecute):
         },
         allow_errors=True,
     )
-    assert bad.errors[0].extensions["code"] == "SEND_REJECTED"
+    assert error_code(bad) == "SEND_REJECTED"
     none = await aexecute(
         SEND, {"input": {"account": box["id"], "text": "x"}}, allow_errors=True
     )
-    assert none.errors[0].extensions["code"] == "SEND_REJECTED"
+    assert error_code(none) == "SEND_REJECTED"
 
     # A wrong SMTP password: the send is recorded FAILED and the mailbox needs new credentials.
     await models.MailAccount.objects.filter(id=box["id"]).aupdate(

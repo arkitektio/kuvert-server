@@ -3,11 +3,13 @@
 import pytest
 
 from mail import models
+from tests.conftest import Dovecot
+from tests.support import AExecute, DovecotMailbox, Sync
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def _append(dovecot, user: str, *subjects: str) -> None:
+def _append(dovecot: Dovecot, user: str, *subjects: str) -> None:
     with dovecot.imap(user) as imap:
         for subject in subjects:
             imap.append(
@@ -16,7 +18,7 @@ def _append(dovecot, user: str, *subjects: str) -> None:
             )
 
 
-def _flags(dovecot, user: str, folder: str = "INBOX") -> dict[str, set[str]]:
+def _flags(dovecot: Dovecot, user: str, folder: str = "INBOX") -> dict[str, set[str]]:
     with dovecot.imap(user) as imap:
         imap.select_folder(folder, readonly=True)
         uids = imap.search("ALL")
@@ -33,7 +35,9 @@ def _flags(dovecot, user: str, folder: str = "INBOX") -> dict[str, set[str]]:
     }
 
 
-async def test_flag_changes_are_read_with_changedsince(dovecot_mailbox, dovecot, sync):
+async def test_flag_changes_are_read_with_changedsince(
+    dovecot_mailbox: DovecotMailbox, dovecot: Dovecot, sync: Sync
+) -> None:
     box = await dovecot_mailbox()
     assert "CONDSTORE" in box["capabilities"]
     _append(dovecot, box["user"], "one", "two")
@@ -52,7 +56,9 @@ async def test_flag_changes_are_read_with_changedsince(dovecot_mailbox, dovecot,
     assert (await sync(box["id"]))["updated"] == 0  # nothing changed since
 
 
-async def test_local_changes_reach_dovecot(dovecot_mailbox, dovecot, sync, aexecute):
+async def test_local_changes_reach_dovecot(
+    dovecot_mailbox: DovecotMailbox, dovecot: Dovecot, sync: Sync, aexecute: AExecute
+) -> None:
     box = await dovecot_mailbox()
     with dovecot.imap(box["user"]) as imap:
         imap.create_folder("Archive")

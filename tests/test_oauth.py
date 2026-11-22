@@ -12,38 +12,43 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from django.utils import timezone
+from kante.context import HttpContext
+from pytest_django.fixtures import SettingsWrapper
 
 from kuvert_server.schema import schema
 from mail import crypto, models
 from mail.protocols.clients import xoauth2_string
-from tests.conftest import PASSWORD, REDIRECT
+from tests.conftest import PASSWORD, REDIRECT, FakeOAuth, GreenMail, Stack
+from tests.support import AExecute, ProviderFor, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 #: An auth session, as the external auth flow contract shapes it.
 SESSION = "state status finish openUrl expiresAt redirectUrl interval userCode step errorCode errorMessage result { identifier id label }"
 START = (
-    "mutation($input: StartOAuthLinkInput!) { startOAuthLink(input: $input) { %s } }"
-    % SESSION
+    "mutation($input: StartOAuthLinkInput!) { startOAuthLink(input: $input) { "
+    + SESSION
+    + " } }"
 )
 COMPLETE = (
-    "mutation($code: String, $state: String!, $error: String, $description: String) { completeAuth(input: {code: $code, state: $state, error: $error, errorDescription: $description}) { %s } }"
-    % SESSION
+    "mutation($code: String, $state: String!, $error: String, $description: String) { completeAuth(input: {code: $code, state: $state, error: $error, errorDescription: $description}) { "
+    + SESSION
+    + " } }"
 )
-READ = "query($s: String!) { authSession(state: $s) { %s } }" % SESSION
-RESUME = "mutation($s: String!) { resumeAuth(state: $s) { %s } }" % SESSION
-CANCEL = "mutation($s: String!) { cancelAuth(state: $s) { %s } }" % SESSION
+READ = "query($s: String!) { authSession(state: $s) { " + SESSION + " } }"
+RESUME = "mutation($s: String!) { resumeAuth(state: $s) { " + SESSION + " } }"
+CANCEL = "mutation($s: String!) { cancelAuth(state: $s) { " + SESSION + " } }"
 ACCOUNT = "query($id: ID!) { mailAccount(id: $id) { id emailAddress displayName provider mailProvider { id } authMethod status incomingHost incomingPort saveSentCopy pendingAuth { state status } } }"
 SEND = 'mutation($a: ID!, $to: String!) { sendMessage(input: {account: $a, to: [{address: $to}], text: "hi"}) { status errorCode error } }'
 
 
-def test_xoauth2_initial_response():
+def test_xoauth2_initial_response() -> None:
     assert xoauth2_string("me@x", "tok") == "user=me@x\x01auth=Bearer tok\x01\x01"
 
 
 async def test_a_login_needs_an_enabled_oauth_provider(
-    aexecute, provider_for, other_org_context
-):
+    aexecute: AExecute, provider_for: ProviderFor, other_org_context: HttpContext
+) -> None:
     imap = await provider_for("GENERIC")
     gmail = await provider_for("GMAIL")
     elsewhere = await provider_for("GMAIL", other_org_context)
@@ -56,17 +61,19 @@ async def test_a_login_needs_an_enabled_oauth_provider(
     )
     unnamed = await aexecute(START, {"input": {}}, allow_errors=True)
 
-    assert disabled.errors[0].extensions["code"] == "NOT_CONFIGURED"
+    assert error_code(disabled) == "NOT_CONFIGURED"
     assert (
-        password.errors[0].extensions["code"] == "INVALID_STATE"
+        error_code(password) == "INVALID_STATE"
         and "createMailAccount" in password.errors[0].message
     )
-    assert foreign.errors[0].extensions["code"] == "NOT_FOUND"
+    assert error_code(foreign) == "NOT_FOUND"
     assert "provider" in unnamed.errors[0].message
     assert not await models.OAuthLink.objects.aexists()
 
 
-async def _link(aexecute, fakeoauth, greenmail, **extra) -> tuple[dict, str]:
+async def _link(
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail, **extra: object
+) -> tuple[dict, str]:
     address = greenmail.user()
     session = (
         await aexecute(
@@ -90,7 +97,9 @@ async def _link(aexecute, fakeoauth, greenmail, **extra) -> tuple[dict, str]:
     return account, address
 
 
-async def test_link_and_send(aexecute, fakeoauth, greenmail, backend_stack):
+async def test_link_and_send(
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail, backend_stack: Stack
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]
@@ -148,7 +157,7 @@ async def test_link_and_send(aexecute, fakeoauth, greenmail, backend_stack):
     greenmail.wait_for(friend, 1)
 
 
-def _exchanges(fakeoauth, since: int) -> int:
+def _exchanges(fakeoauth: FakeOAuth, since: int) -> int:
     return len(
         [e for e in fakeoauth.log()[since:] if e["grant_type"] == "authorization_code"]
     )
@@ -156,8 +165,13 @@ def _exchanges(fakeoauth, since: int) -> int:
 
 @pytest.mark.parametrize("who", ["colleague_context", "other_org_context"])
 async def test_only_who_started_a_login_reaches_it(
-    aexecute, fakeoauth, greenmail, who, colleague_context, other_org_context
-):
+    aexecute: AExecute,
+    fakeoauth: FakeOAuth,
+    greenmail: GreenMail,
+    who: str,
+    colleague_context: HttpContext,
+    other_org_context: HttpContext,
+) -> None:
     """Another member of the organization, and another organization, get what an unknown state gets."""
     stranger = {
         "colleague_context": colleague_context,
@@ -191,14 +205,14 @@ async def test_only_who_started_a_login_reaches_it(
     unknown = await aexecute(READ, {"s": "not-a-state"}, allow_errors=True)
     resumed = (await aexecute(RESUME, {"s": session["state"]})).data["resumeAuth"]
 
-    assert [a.errors[0].extensions["code"] for a in answers] == ["INVALID_STATE"] * 4
+    assert [error_code(a) for a in answers] == ["INVALID_STATE"] * 4
     assert [a.errors[0].message for a in answers] == [unknown.errors[0].message] * 4
     assert resumed == session and _exchanges(fakeoauth, seen) == 0
 
 
 async def test_completing_a_finished_login_again_answers_the_same_and_exchanges_nothing(
-    aexecute, fakeoauth, greenmail
-):
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]
@@ -229,8 +243,11 @@ async def test_completing_a_finished_login_again_answers_the_same_and_exchanges_
 
 
 async def test_two_completions_at_once_exchange_the_code_once(
-    aexecute, authenticated_context, fakeoauth, greenmail
-):
+    aexecute: AExecute,
+    authenticated_context: HttpContext,
+    fakeoauth: FakeOAuth,
+    greenmail: GreenMail,
+) -> None:
     """The callback page and a pasted redirect race: a real second thread, parked mid-exchange at the provider."""
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
@@ -282,8 +299,8 @@ async def test_two_completions_at_once_exchange_the_code_once(
 
 
 async def test_a_code_the_provider_refuses_ends_the_login_as_failed(
-    aexecute, fakeoauth
-):
+    aexecute: AExecute, fakeoauth: FakeOAuth
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]
@@ -304,8 +321,8 @@ async def test_a_code_the_provider_refuses_ends_the_login_as_failed(
 
 
 async def test_the_providers_refusal_is_recorded_in_its_words(
-    aexecute, fakeoauth, greenmail
-):
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]
@@ -337,8 +354,11 @@ async def test_the_providers_refusal_is_recorded_in_its_words(
 
 
 async def test_an_unreachable_provider_does_not_end_a_login(
-    aexecute, fakeoauth, greenmail, settings
-):
+    aexecute: AExecute,
+    fakeoauth: FakeOAuth,
+    greenmail: GreenMail,
+    settings: SettingsWrapper,
+) -> None:
     """Not getting an answer is an error of that call, not of the login: the code is still good."""
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
@@ -361,14 +381,14 @@ async def test_an_unreachable_provider_does_not_end_a_login(
         "completeAuth"
     ]
 
-    assert unreachable.errors[0].extensions["code"] == "PROVIDER_ERROR"
+    assert error_code(unreachable) == "PROVIDER_ERROR"
     assert read["status"] == "PENDING"
     assert done["status"] == "DONE"
 
 
 async def test_cancel_is_idempotent_and_the_login_can_still_be_read(
-    aexecute, fakeoauth, greenmail
-):
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]
@@ -396,7 +416,9 @@ async def test_cancel_is_idempotent_and_the_login_can_still_be_read(
     )
 
 
-async def test_unregistered_redirect_is_refused(aexecute, fakeoauth):
+async def test_unregistered_redirect_is_refused(
+    aexecute: AExecute, fakeoauth: FakeOAuth
+) -> None:
     result = await aexecute(
         START,
         {
@@ -407,10 +429,12 @@ async def test_unregistered_redirect_is_refused(aexecute, fakeoauth):
         },
         allow_errors=True,
     )
-    assert result.errors[0].extensions["code"] == "INVALID_STATE"
+    assert error_code(result) == "INVALID_STATE"
 
 
-async def test_expired_link_is_refused(aexecute, fakeoauth, greenmail):
+async def test_expired_link_is_refused(
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]
@@ -432,7 +456,9 @@ async def test_expired_link_is_refused(aexecute, fakeoauth, greenmail):
     assert completed["status"] == "EXPIRED" and _exchanges(fakeoauth, seen) == 0
 
 
-async def test_refresh_then_revocation_then_relink(aexecute, fakeoauth, greenmail):
+async def test_refresh_then_revocation_then_relink(
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail
+) -> None:
     account, address = await _link(aexecute, fakeoauth, greenmail)
     friend = greenmail.user()
 
@@ -491,7 +517,9 @@ async def test_refresh_then_revocation_then_relink(aexecute, fakeoauth, greenmai
     ]["status"] == "SENT"
 
 
-async def test_relink_must_approve_the_same_address(aexecute, fakeoauth, greenmail):
+async def test_relink_must_approve_the_same_address(
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail
+) -> None:
     account, _ = await _link(aexecute, fakeoauth, greenmail)
     session = (
         await aexecute(
@@ -510,7 +538,9 @@ async def test_relink_must_approve_the_same_address(aexecute, fakeoauth, greenma
     ) and account["emailAddress"] in failed["errorMessage"]
 
 
-async def test_rotated_refresh_tokens_are_stored(aexecute, fakeoauth, greenmail):
+async def test_rotated_refresh_tokens_are_stored(
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail
+) -> None:
     fakeoauth.config(rotate_refresh=True)
     account, _ = await _link(aexecute, fakeoauth, greenmail)
     before = crypto.decrypt(

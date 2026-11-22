@@ -20,6 +20,7 @@ from email.utils import format_datetime, formataddr, make_msgid
 
 from django.conf import settings
 from django.utils import timezone
+from kante.context import User
 
 from mail import accounts, changes, models, providers, storage, sync
 from mail.errors import MailError, code_for, not_configured
@@ -189,7 +190,7 @@ def send(outgoing: models.OutgoingMessage) -> models.OutgoingMessage:
 
 def prepare(
     account: models.MailAccount,
-    creator,
+    creator: User | None,
     *,
     to: list[dict],
     cc: list[dict],
@@ -199,7 +200,7 @@ def prepare(
     html: str,
     in_reply_to: models.Message | None,
     attachments: list,
-) -> models.OutgoingMessage:  # noqa: ANN001
+) -> models.OutgoingMessage:
     """Validate and record a message to send (status SENDING); NOT_CONFIGURED when the mailbox's provider does not send."""
     providers.require(account.mail_provider, models.ProviderCapability.SEND)
     recipients = [*to, *cc, *bcc]

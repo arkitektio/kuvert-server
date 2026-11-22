@@ -2,14 +2,17 @@
 member who linked it unless shared. Anything not visible looks exactly like a missing id."""
 
 import pytest
+from kante.context import HttpContext
 
 from mail import models
+from tests.conftest import GreenMail
+from tests.support import AExecute, Data, Mailbox, Sync, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
-async def private_box(mailbox, greenmail, sync):
+async def private_box(mailbox: Mailbox, greenmail: GreenMail, sync: Sync) -> Data:
     box = await mailbox()
     greenmail.deliver(
         box["address"],
@@ -29,7 +32,7 @@ async def private_box(mailbox, greenmail, sync):
 
 
 @pytest.fixture(params=["other_org_context", "colleague_context"])
-def outsider(request):
+def outsider(request: pytest.FixtureRequest) -> HttpContext:
     """A member of another organization, and a colleague the mailbox is not shared with."""
     return request.getfixturevalue(request.param)
 
@@ -69,24 +72,30 @@ BY_ID = [
 
 
 @pytest.mark.parametrize("selection", LISTS)
-async def test_lists_hide_private_mailboxes(private_box, aexecute, outsider, selection):
+async def test_lists_hide_private_mailboxes(
+    private_box: Data, aexecute: AExecute, outsider: HttpContext, selection: str
+) -> None:
     result = await aexecute(f"query {{ {selection} }}", context=outsider)
     assert list(result.data.values())[0] == []
 
 
 @pytest.mark.parametrize("document,key", BY_ID)
-async def test_by_id_is_not_found(private_box, aexecute, outsider, document, key):
+async def test_by_id_is_not_found(
+    private_box: Data,
+    aexecute: AExecute,
+    outsider: HttpContext,
+    document: str,
+    key: str,
+) -> None:
     result = await aexecute(
         document, {"id": private_box[key]}, context=outsider, allow_errors=True
     )
-    assert result.errors and result.errors[0].extensions["code"] == "NOT_FOUND", (
-        result.errors
-    )
+    assert result.errors and error_code(result) == "NOT_FOUND", result.errors
 
 
 async def test_similar_to_ignores_invisible_anchor(
-    private_box, aexecute, colleague_context
-):
+    private_box: Data, aexecute: AExecute, colleague_context: HttpContext
+) -> None:
     result = await aexecute(
         "query($id: ID!) { messages(filters: {similarTo: $id}) { id } }",
         {"id": private_box["message"]},
@@ -99,8 +108,11 @@ SHARE = "mutation($id: ID!, $v: Visibility!, $users: [ID!]) { shareMailAccount(i
 
 
 async def test_sharing_with_a_member(
-    private_box, aexecute, colleague_context, other_org_context
-):
+    private_box: Data,
+    aexecute: AExecute,
+    colleague_context: HttpContext,
+    other_org_context: HttpContext,
+) -> None:
     colleague = colleague_context.request.user
     shared = (
         await aexecute(
@@ -133,14 +145,14 @@ async def test_sharing_with_a_member(
             context=colleague_context,
             allow_errors=True,
         )
-        assert denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
+        assert error_code(denied) == "PERMISSION_DENIED"
     denied = await aexecute(
         SHARE,
         {"id": private_box["account"], "v": "ORGANIZATION"},
         context=colleague_context,
         allow_errors=True,
     )
-    assert denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
+    assert error_code(denied) == "PERMISSION_DENIED"
     # Never beyond the organization.
     outsider = other_org_context.request.user
     refused = await aexecute(
@@ -148,12 +160,15 @@ async def test_sharing_with_a_member(
         {"id": private_box["account"], "v": "SHARED", "users": [str(outsider.id)]},
         allow_errors=True,
     )
-    assert refused.errors[0].extensions["code"] == "VALIDATION_ERROR"
+    assert error_code(refused) == "VALIDATION_ERROR"
 
 
 async def test_organization_mailbox_is_seen_by_every_member(
-    private_box, aexecute, colleague_context, other_org_context
-):
+    private_box: Data,
+    aexecute: AExecute,
+    colleague_context: HttpContext,
+    other_org_context: HttpContext,
+) -> None:
     await aexecute(SHARE, {"id": private_box["account"], "v": "ORGANIZATION"})
     assert (
         len(

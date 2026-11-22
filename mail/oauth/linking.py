@@ -23,6 +23,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from kante.context import Organization, User
 
 from mail import crypto, models, providers
 from mail.errors import MailError
@@ -39,15 +40,15 @@ def _expires_in() -> timedelta:
 
 
 def start(
-    organization,
-    user,
+    organization: Organization,
+    user: User,
     provider: models.MailProvider,
     protocol: str,
     redirect_url: str | None,
     name: str = "",
     account: models.MailAccount | None = None,
     login_hint: str | None = None,
-) -> models.OAuthLink:  # noqa: ANN001
+) -> models.OAuthLink:
     """A PENDING link through ``provider`` whose ``auth_url`` the client opens."""
     providers.usable(provider, "This login")
     if providers.kind_of(provider.kind).auth_method != models.AuthMethod.XOAUTH2:
@@ -91,7 +92,7 @@ def start(
     )
 
 
-def find(organization, user, state: str) -> models.OAuthLink:  # noqa: ANN001
+def find(organization: Organization, user: User, state: str) -> models.OAuthLink:
     """The login with ``state`` that ``user`` started in ``organization``; anything else is the same as no login."""
     link = (
         models.OAuthLink.objects.filter(

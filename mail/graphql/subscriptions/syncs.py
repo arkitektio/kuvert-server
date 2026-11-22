@@ -14,7 +14,7 @@ __all__ = ["mailbox_syncs"]
 
 
 async def mailbox_syncs(
-    self, info: Info
+    self: object, info: Info
 ) -> AsyncGenerator[types.MailboxSyncEvent, None]:
     """Stream an event whenever a mailbox the caller may see finished syncing."""
     request = info.context.request

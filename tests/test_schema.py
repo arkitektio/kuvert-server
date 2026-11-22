@@ -1,6 +1,9 @@
 """Schema-surface checks: enums in step with the models."""
 
+from enum import Enum
+
 import pytest
+from django.db.models import Choices
 
 from mail import enums, models
 
@@ -26,5 +29,5 @@ from mail import enums, models
         (enums.CategorySync, models.CategorySync),
     ],
 )
-def test_enums_match_choices(enum, choices):
+def test_enums_match_choices(enum: type[Enum], choices: type[Choices]) -> None:
     assert [member.value for member in enum] == list(choices.values)

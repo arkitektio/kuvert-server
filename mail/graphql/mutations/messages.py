@@ -9,6 +9,7 @@ from collections import defaultdict
 
 import strawberry
 from channels.db import database_sync_to_async
+from kante.context import User
 from kante.errors import ValidationError
 from kante.types import Info
 
@@ -130,7 +131,7 @@ def _load(
     return groups
 
 
-def _user(info: Info):  # noqa: ANN202
+def _user(info: Info) -> User:
     return info.context.request.user
 
 

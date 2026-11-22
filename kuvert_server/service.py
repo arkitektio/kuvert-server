@@ -68,7 +68,9 @@ on_account = organization_of("account.organization")
 service.model_signal(mailprovider, organization=organization_of())
 
 
-def _team_mailbox(obj, kind: str) -> bool:
+def _team_mailbox(
+    obj: models.Message | models.Thread | models.OutgoingMessage, kind: str
+) -> bool:
     """Only mail of a mailbox every member of the organization sees."""
     return obj.account.visibility == models.Visibility.ORGANIZATION
 

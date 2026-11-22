@@ -17,11 +17,14 @@ fetches a row by id (mutations, single-object queries, subscriptions) goes throu
 NOT_FOUND exactly like a missing one (:mod:`mail.graphql.utils`).
 """
 
+from collections.abc import Callable
 from functools import cache
+from typing import Any
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models as django_models
 from django.db.models import Q
+from kante.context import Organization, User
 from kante.types import Info
 
 # Models with no organization anywhere in their non-nullable FK graph. Keep this list short and
@@ -32,8 +35,11 @@ _MAX_PATH_DEPTH = 3
 
 
 def _find_path(
-    model: type[django_models.Model], depth: int, target: str, is_target
-) -> str | None:  # noqa: ANN001
+    model: type[django_models.Model],
+    depth: int,
+    target: str,
+    is_target: Callable[[type[django_models.Model]], bool],
+) -> str | None:
     if is_target(model):
         return ""
     try:
@@ -79,7 +85,7 @@ def owner_path(model: type[django_models.Model]) -> str | None:
     return _find_path(model, _MAX_PATH_DEPTH, "owner", lambda m: False)
 
 
-def visible_accounts_q(user, prefix: str = "") -> Q:  # noqa: ANN001 - authentikate User
+def visible_accounts_q(user: User, prefix: str = "") -> Q:
     """The mailboxes ``user`` may see (the organization is filtered separately)."""
     from mail.models import Visibility
 
@@ -94,8 +100,8 @@ def visible_accounts_q(user, prefix: str = "") -> Q:  # noqa: ANN001 - authentik
 
 
 def scope_to(
-    queryset: django_models.QuerySet, organization, user
-) -> django_models.QuerySet:  # noqa: ANN001
+    queryset: django_models.QuerySet, organization: Organization, user: User
+) -> django_models.QuerySet:
     """Narrow ``queryset`` to ``organization`` and to the mailboxes ``user`` may see."""
     model = queryset.model
     path = organization_path(model)
@@ -136,14 +142,14 @@ def for_org(model: type[django_models.Model], info: Info) -> django_models.Query
 
 
 def get_for_org(
-    model: type[django_models.Model], info: Info, **kwargs
+    model: type[django_models.Model], info: Info, **kwargs: Any
 ) -> django_models.Model:
     """``Model.objects.get`` limited to what the request may see."""
     return for_org(model, info).get(**kwargs)
 
 
 async def aget_for_org(
-    model: type[django_models.Model], info: Info, **kwargs
+    model: type[django_models.Model], info: Info, **kwargs: Any
 ) -> django_models.Model:
     """Async ``Model.objects.aget`` limited to what the request may see."""
     return await for_org(model, info).aget(**kwargs)

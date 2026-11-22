@@ -7,12 +7,14 @@ What happens before a push -- the undo window, local-only settings, surviving sy
 import pytest
 
 from mail import models
+from tests.conftest import GreenMail
+from tests.support import AExecute, Data, Mailbox, Sync, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
-async def box_with_mail(mailbox, greenmail, sync):
+async def box_with_mail(mailbox: Mailbox, greenmail: GreenMail, sync: Sync) -> Data:
     box = await mailbox()
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Archive")
@@ -33,7 +35,7 @@ async def box_with_mail(mailbox, greenmail, sync):
 
 
 def _server_flags(
-    greenmail, address: str, folder: str = "INBOX"
+    greenmail: GreenMail, address: str, folder: str = "INBOX"
 ) -> dict[str, set[str]]:
     with greenmail.imap(address) as imap:
         imap.select_folder(folder, readonly=True)
@@ -48,7 +50,9 @@ def _server_flags(
     }
 
 
-async def test_flags_are_set_on_the_server(box_with_mail, aexecute, greenmail):
+async def test_flags_are_set_on_the_server(
+    box_with_mail: Data, aexecute: AExecute, greenmail: GreenMail
+) -> None:
     one = box_with_mail["messages"]["One"]
     result = await aexecute(
         'mutation($ids: [ID!]!) { setMessageFlags(input: {messages: $ids, add: ["\\\\Flagged", "$Work"]}) { flags isFlagged } }',
@@ -73,17 +77,21 @@ async def test_flags_are_set_on_the_server(box_with_mail, aexecute, greenmail):
     assert unread == [{"subject": "Two"}]
 
 
-async def test_invalid_flags_are_refused(box_with_mail, aexecute):
+async def test_invalid_flags_are_refused(
+    box_with_mail: Data, aexecute: AExecute
+) -> None:
     for flag in ["\\Deleted", "bad flag", "a\\b"]:
         result = await aexecute(
             "mutation($ids: [ID!]!, $f: String!) { setMessageFlags(input: {messages: $ids, add: [$f]}) { id } }",
             {"ids": [box_with_mail["messages"]["One"]], "f": flag},
             allow_errors=True,
         )
-        assert result.errors[0].extensions["code"] == "VALIDATION_ERROR"
+        assert error_code(result) == "VALIDATION_ERROR"
 
 
-async def test_move_lands_in_the_destination(box_with_mail, aexecute, greenmail):
+async def test_move_lands_in_the_destination(
+    box_with_mail: Data, aexecute: AExecute, greenmail: GreenMail
+) -> None:
     one = box_with_mail["messages"]["One"]
     moved = await aexecute(
         "mutation($ids: [ID!]!, $f: ID!) { moveMessages(input: {messages: $ids, folder: $f}) { id subject folder { path } syncState } }",
@@ -121,7 +129,9 @@ async def test_move_lands_in_the_destination(box_with_mail, aexecute, greenmail)
     )
 
 
-async def test_delete_moves_to_trash_then_expunges(box_with_mail, aexecute, greenmail):
+async def test_delete_moves_to_trash_then_expunges(
+    box_with_mail: Data, aexecute: AExecute, greenmail: GreenMail
+) -> None:
     two = box_with_mail["messages"]["Two"]
     assert (
         await aexecute(
@@ -144,8 +154,8 @@ async def test_delete_moves_to_trash_then_expunges(box_with_mail, aexecute, gree
 
 
 async def test_a_server_failure_keeps_the_local_change(
-    box_with_mail, aexecute, greenmail, sync
-):
+    box_with_mail: Data, aexecute: AExecute, greenmail: GreenMail, sync: Sync
+) -> None:
     """The folder was replaced on the server (new UIDVALIDITY): the flag stays here, the push fails -- and the next sync finds the message again."""
     one = box_with_mail["messages"]["One"]
     await aexecute(

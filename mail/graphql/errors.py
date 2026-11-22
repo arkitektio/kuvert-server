@@ -6,10 +6,14 @@ a mailbox, so a client handles both with one table.
 
 import functools
 import inspect
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 from kante.errors import KanteError
 
 from mail.errors import SyncTooSoon, code_for
+
+_F = TypeVar("_F", bound=Callable[..., object])
 
 
 def translate(error: Exception) -> Exception:
@@ -27,24 +31,24 @@ def translate(error: Exception) -> Exception:
     return KanteError(str(error), code=str(code.value), extensions=extensions)
 
 
-def translated(fn):  # noqa: ANN001, ANN201
+def translated(fn: _F) -> _F:
     """Decorate a resolver so known failures surface with their code (sync or async)."""
     if inspect.iscoroutinefunction(fn):
 
         @functools.wraps(fn)
-        async def async_wrapper(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        async def async_wrapper(*args: Any, **kwargs: Any) -> object:
             try:
                 return await fn(*args, **kwargs)
             except Exception as error:
                 raise translate(error) from error
 
-        return async_wrapper
+        return cast(_F, async_wrapper)
 
     @functools.wraps(fn)
-    def wrapper(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+    def wrapper(*args: Any, **kwargs: Any) -> object:
         try:
             return fn(*args, **kwargs)
         except Exception as error:
             raise translate(error) from error
 
-    return wrapper
+    return cast(_F, wrapper)

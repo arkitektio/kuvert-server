@@ -2,12 +2,14 @@
 
 from pathlib import Path
 
+import pytest
+
 from kuvert_server.configuration import Settings
 
 CONFIG = str(Path(__file__).resolve().parent.parent / "config.yaml")
 
 
-def test_config_yaml_loads(monkeypatch):
+def test_config_yaml_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARKITEKT_CONFIG_FILE", CONFIG)
     settings = Settings()
     assert settings.postgres.db_name == "kuvert"
@@ -20,7 +22,7 @@ def test_config_yaml_loads(monkeypatch):
     assert settings.oauth.google is None and settings.datalayer is None
 
 
-def test_env_overrides_yaml(monkeypatch):
+def test_env_overrides_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARKITEKT_CONFIG_FILE", CONFIG)
     monkeypatch.setenv("POSTGRES__PASSWORD", "from-env")
     monkeypatch.setenv("SYNC__BATCH_SIZE", "17")

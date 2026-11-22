@@ -3,6 +3,8 @@
 import pytest
 
 from mail import models, sanitize
+from tests.conftest import GreenMail
+from tests.support import AExecute, Mailbox, Sync
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -20,7 +22,7 @@ EVIL = """
 """
 
 
-def test_clean_strips_active_content():
+def test_clean_strips_active_content() -> None:
     html = sanitize.clean(EVIL)
     for bad in (
         "<script",
@@ -44,7 +46,9 @@ def test_clean_strips_active_content():
     assert "track.example" not in blocked and 'src="cid:logo"' in blocked
 
 
-async def test_html_field_blocks_remote_images(mailbox, greenmail, sync, aexecute):
+async def test_html_field_blocks_remote_images(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     greenmail.deliver(box["address"], "Newsletter", "Plain part", html=EVIL)
     greenmail.wait_for(box["address"], 1)

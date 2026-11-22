@@ -23,20 +23,41 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from email.message import EmailMessage
 from email.utils import format_datetime, make_msgid
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 import pytest
 from authentikate.models import Client, Membership, Organization, User
+from botocore.client import BaseClient
 from dokker import testing
+from graphql import GraphQLError
 from imapclient import IMAPClient
-from kante.context import HttpContext, UniversalRequest
+from kante.context import HttpContext, UniversalRequest, WsContext
+from pytest_django import DjangoDbBlocker
+from pytest_django.fixtures import SettingsWrapper
 from strawberry.http.temporal_response import TemporalResponse
+from strawberry.types import ExecutionResult
 
 from kuvert_server.schema import schema
+from tests.support import (
+    AExecute,
+    Data,
+    DovecotMailbox,
+    Mailbox,
+    ProviderFor,
+    Subscribe,
+    Sync,
+    WsContexts,
+)
+
+if TYPE_CHECKING:
+    from mail import models
 
 MAIL_DOMAIN = "kuvert.test"
 PASSWORD = "secret-pw"
@@ -57,20 +78,20 @@ class Stack:
     dovecot_port: int
 
 
-def _wait(check, what: str, timeout: float = 60) -> None:  # noqa: ANN001
+def _wait(check: Callable[[], None], what: str, timeout: float = 60) -> None:
     deadline = time.monotonic() + timeout
     while True:
         try:
             check()
             return
-        except Exception:
+        except Exception as error:
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"{what} did not come up in {timeout}s")
+                raise RuntimeError(f"{what} did not come up in {timeout}s") from error
             time.sleep(0.2)
 
 
 @pytest.fixture(scope="session")
-def backend_stack():
+def backend_stack() -> Iterator[Stack]:
     """Bring up the stack and yield the host ports docker gave it (none are pinned)."""
     compose = Path(__file__).parent / "integration" / "docker-compose.yaml"
     with testing(str(compose)) as e:
@@ -165,7 +186,7 @@ def backend_stack():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def embedding_model_warm():
+def embedding_model_warm() -> Iterator[None]:
     """Load the embedding model once per session, outside any test's DB transaction."""
     from embeddings import engine
 
@@ -174,7 +195,7 @@ def embedding_model_warm():
 
 
 @pytest.fixture(scope="session")
-def django_db_modify_db_settings(backend_stack):
+def django_db_modify_db_settings(backend_stack: Stack) -> Iterator[None]:
     """Point Django at the stack's postgres before pytest-django creates the test database."""
     from django.conf import settings
 
@@ -183,7 +204,9 @@ def django_db_modify_db_settings(backend_stack):
 
 
 @pytest.fixture(scope="session")
-def django_db_setup(django_db_setup, django_db_blocker):
+def django_db_setup(
+    django_db_setup: None, django_db_blocker: DjangoDbBlocker
+) -> Iterator[None]:
     """Kill the connections of worker threads before the test database is dropped."""
     yield
     from django.db import connections
@@ -197,7 +220,7 @@ def django_db_setup(django_db_setup, django_db_blocker):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def fernet_key(tmp_path_factory):
+def fernet_key(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     """A Fernet key generated for the run; nothing is committed."""
     from cryptography.fernet import Fernet
     from django.conf import settings
@@ -261,8 +284,8 @@ class GreenMail:
         in_reply_to: str | None = None,
         references: list[str] | None = None,
         attachments: list[tuple[str, str, bytes]] | None = None,
-        date=None,
-    ) -> str:  # noqa: ANN001
+        date: datetime | None = None,
+    ) -> str:
         """Deliver a message to ``to`` over plain SMTP; returns its Message-ID (without brackets)."""
         msg = EmailMessage()
         msg["From"] = sender
@@ -328,7 +351,7 @@ class GreenMail:
 
 
 @pytest.fixture(scope="session")
-def greenmail(backend_stack) -> GreenMail:
+def greenmail(backend_stack: Stack) -> GreenMail:
     return GreenMail(backend_stack)
 
 
@@ -359,31 +382,33 @@ def _context(
 
 
 @pytest.fixture
-def authenticated_context(transactional_db) -> HttpContext:
+def authenticated_context(transactional_db: None) -> HttpContext:
     """Member A of ``static_org`` (the static ``test`` token)."""
     return _context("test", "1", "static_org")
 
 
 @pytest.fixture
-def admin_context(transactional_db) -> HttpContext:
+def admin_context(transactional_db: None) -> HttpContext:
     """kuvert's admin in ``static_org``: the only role that may set providers up."""
     return _context("admin", "3", "static_org", roles=["kuvert_admin"])
 
 
 @pytest.fixture
-def colleague_context(transactional_db) -> HttpContext:
+def colleague_context(transactional_db: None) -> HttpContext:
     """Member B of ``static_org``: same organization, different user."""
     return _context("colleague", "2", "static_org")
 
 
 @pytest.fixture
-def other_org_context(transactional_db) -> HttpContext:
+def other_org_context(transactional_db: None) -> HttpContext:
     """A member of ``other_org``."""
     return _context("othertest", "9", "other_org")
 
 
 @pytest.fixture
-async def ws_contexts(authenticated_context):
+async def ws_contexts(
+    authenticated_context: HttpContext,
+) -> AsyncIterator[WsContexts]:
     """A factory for websocket contexts, to run subscriptions in-process against the in-memory channel layer.
 
     Each context gets its own consumer, plus a pump task that feeds the layer's messages into the
@@ -394,7 +419,6 @@ async def ws_contexts(authenticated_context):
     import contextlib
 
     from channels.layers import get_channel_layer
-    from kante.context import WsContext
     from strawberry.channels import ChannelsConsumer
 
     layer = get_channel_layer()
@@ -428,7 +452,7 @@ async def ws_contexts(authenticated_context):
 class Subscription:
     """A running subscription: its events land in a queue (``next``), its first frame is awaited by ``start``."""
 
-    def __init__(self, context, query: str, variables: dict) -> None:  # noqa: ANN001
+    def __init__(self, context: WsContext, query: str, variables: dict) -> None:
         import asyncio
 
         self.context, self.query, self.variables = context, query, variables
@@ -464,15 +488,16 @@ class Subscription:
             raise AssertionError(f"the subscription never joined {group}")
         return self
 
-    async def next(self, timeout: float = 5):  # noqa: ANN201
+    async def next(self, timeout: float = 5) -> Data:
         """The next result; fails the test on GraphQL errors."""
         import asyncio
 
         result = await asyncio.wait_for(self.events.get(), timeout)
         assert not result.errors, result.errors
+        assert result.data is not None
         return result.data
 
-    async def error(self, timeout: float = 5):  # noqa: ANN201
+    async def error(self, timeout: float = 5) -> GraphQLError:
         """The next result, which must be an error."""
         import asyncio
 
@@ -501,7 +526,7 @@ class Subscription:
 
 
 @pytest.fixture
-async def subscribe(ws_contexts):
+async def subscribe(ws_contexts: WsContexts) -> AsyncIterator[Subscribe]:
     """Start a subscription as a static token; stopped after the test."""
     started: list[Subscription] = []
 
@@ -523,7 +548,7 @@ async def subscribe(ws_contexts):
 
 
 @pytest.fixture
-def aexecute(authenticated_context):
+def aexecute(authenticated_context: HttpContext) -> AExecute:
     """Run a GraphQL document as member A (or ``context``); fails the test on GraphQL errors unless ``allow_errors``."""
 
     async def _run(
@@ -531,7 +556,7 @@ def aexecute(authenticated_context):
         variables: dict | None = None,
         context: HttpContext | None = None,
         allow_errors: bool = False,
-    ):
+    ) -> ExecutionResult:
         result = await schema.execute(
             query,
             variable_values=variables or {},
@@ -539,14 +564,16 @@ def aexecute(authenticated_context):
         )
         if not allow_errors:
             assert not result.errors, result.errors
+            assert result.data is not None
         return result
 
-    return _run
+    # Without allow_errors the result was checked to carry data: AExecute says so.
+    return cast(AExecute, _run)
 
 
 def make_provider(
-    organization: Organization, kind: str = "GENERIC", **fields
-) -> "models.MailProvider":  # noqa: ANN003, F821
+    organization: Organization, kind: str = "GENERIC", **fields: Any
+) -> "models.MailProvider":
     """A provider row as an admin's mutation would leave it (``tests/test_providers.py`` covers the mutations themselves).
 
     GENERIC is open to any server unless ``settings`` fixes them; GMAIL and MICROSOFT are the
@@ -580,7 +607,7 @@ def make_provider(
 
 
 @pytest.fixture
-def provider_for(authenticated_context):
+def provider_for(authenticated_context: HttpContext) -> ProviderFor:
     """The id of the first provider of a kind in member A's (or ``context``'s) organization, set up on first use."""
     from channels.db import database_sync_to_async
 
@@ -614,15 +641,20 @@ mutation Sync($id: ID!) { syncMailAccount(id: $id) { created updated deleted fol
 
 
 @pytest.fixture
-def mailbox(aexecute, greenmail, backend_stack, provider_for):
+def mailbox(
+    aexecute: AExecute,
+    greenmail: GreenMail,
+    backend_stack: Stack,
+    provider_for: ProviderFor,
+) -> Mailbox:
     """Link a fresh GreenMail user as a mailbox (as member A, or ``context``) through the organization's open IMAP provider; returns ``{id, address, …}``."""
 
     async def _link(
         protocol: str = "IMAP",
         context: HttpContext | None = None,
         address: str | None = None,
-        **extra,
-    ) -> dict:  # noqa: ANN003
+        **extra: Any,
+    ) -> Data:
         address = address or greenmail.user()
         port = (
             backend_stack.pop3s_port if protocol == "POP3" else backend_stack.imaps_port
@@ -672,15 +704,17 @@ class Dovecot:
 
 
 @pytest.fixture(scope="session")
-def dovecot(backend_stack) -> Dovecot:
+def dovecot(backend_stack: Stack) -> Dovecot:
     return Dovecot(backend_stack)
 
 
 @pytest.fixture
-def dovecot_mailbox(aexecute, dovecot, provider_for):
+def dovecot_mailbox(
+    aexecute: AExecute, dovecot: Dovecot, provider_for: ProviderFor
+) -> DovecotMailbox:
     """A fresh Dovecot user (CONDSTORE) linked as an IMAP mailbox, receive-only; returns ``{id, user, …}``."""
 
-    async def _link() -> dict:
+    async def _link() -> Data:
         user = dovecot.user()
         payload = {
             "provider": await provider_for("GENERIC"),
@@ -701,10 +735,10 @@ def dovecot_mailbox(aexecute, dovecot, provider_for):
 
 
 @pytest.fixture
-def sync(aexecute):
+def sync(aexecute: AExecute) -> Sync:
     """Sync a mailbox through the schema; returns ``syncMailAccount``."""
 
-    async def _sync(account_id: str, context: HttpContext | None = None) -> dict:
+    async def _sync(account_id: str, context: HttpContext | None = None) -> Data:
         return (await aexecute(SYNC, {"id": account_id}, context=context)).data[
             "syncMailAccount"
         ]
@@ -752,7 +786,7 @@ class FakeOAuth:
     def revoke(self, email: str) -> None:
         _post(self.url + "/_admin/revoke", {"email": email})
 
-    def config(self, **values) -> None:  # noqa: ANN003
+    def config(self, **values: object) -> None:
         _post(self.url + "/_admin/config", values)
 
     def hold(self) -> None:
@@ -769,7 +803,9 @@ class FakeOAuth:
 
 
 @pytest.fixture
-def fakeoauth(backend_stack, settings, authenticated_context) -> FakeOAuth:
+def fakeoauth(
+    backend_stack: Stack, settings: SettingsWrapper, authenticated_context: HttpContext
+) -> Iterator[FakeOAuth]:
     """Both kinds' OAuth endpoints pointed at fakeoauth, and a Gmail and a Microsoft provider of member A's organization using its client; the mail servers are the stack's GreenMail."""
     _post(backend_stack.fakeoauth_url + "/_admin/clients", OAUTH_CLIENT)
     endpoints = {
@@ -802,7 +838,7 @@ def fakeoauth(backend_stack, settings, authenticated_context) -> FakeOAuth:
 
 
 @pytest.fixture
-def datalayer(backend_stack, settings):
+def datalayer(backend_stack: Stack, settings: SettingsWrapper) -> Iterator[BaseClient]:
     """The datalayer on, against the stack's RustFS (root keys, as the deployment's service user)."""
     import arkitekt_datalayer.datalayer as dl_module
     import boto3

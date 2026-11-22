@@ -26,7 +26,7 @@ AUTH_RECHECK_SECONDS = 10.0
 
 
 async def mail_changes(
-    self, info: Info, account: strawberry.ID | None = None
+    self: object, info: Info, account: strawberry.ID | None = None
 ) -> AsyncGenerator[types.MailChangesEvent, None]:
     """Stream where a visible mailbox's queue of changes stands, whenever it changes (only `account`'s, when given)."""
     request = info.context.request
@@ -63,7 +63,7 @@ def _key(session: types.AuthSession) -> tuple[object, ...]:
 
 
 async def auth_session(
-    self, info: Info, state: str
+    self: object, info: Info, state: str
 ) -> AsyncGenerator[types.AuthSession, None]:
     """The login as it is now, then again whenever it changes, until it is no longer PENDING. Only its starter may watch it."""
     request = info.context.request

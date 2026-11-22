@@ -1,9 +1,17 @@
+from typing import Any, TypeVar
+
+from django.db.models import Model, QuerySet
+from kante.types import Info
 from strawberry.scalars import JSON
 
 from mail.scoping import scope_queryset
 
+ModelT = TypeVar("ModelT", bound=Model)
 
-def build_prescoped_queryset(info, queryset):  # noqa: ANN001, ANN201
+
+def build_prescoped_queryset(
+    info: Info, queryset: QuerySet[ModelT]
+) -> QuerySet[ModelT]:
     """Limit ``queryset`` to the request's organization and to the mailboxes its user may see.
 
     Every type backing a Query field must route its ``get_queryset`` through here:
@@ -17,7 +25,9 @@ class OrgScoped:
     """Mixin that scopes a type's reads (as mikro's and bank's do), resolved via MRO."""
 
     @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):  # noqa: ANN001, ANN206
+    def get_queryset(
+        cls, queryset: QuerySet[ModelT], info: Info, **kwargs: Any
+    ) -> QuerySet[ModelT]:
         return build_prescoped_queryset(info, queryset)
 
 
@@ -28,7 +38,7 @@ DESCRIPTORS_DESCRIPTION = (
 )
 
 
-def resolve_descriptors(root) -> JSON:  # noqa: ANN001 - the model instance behind any hosted type
+def resolve_descriptors(root: Model) -> JSON:
     """The descriptors of a hosted object, from its structure's declaration (``kuvert_server.service``)."""
     from kuvert_server.service import service  # the declaration imports mail.models
 

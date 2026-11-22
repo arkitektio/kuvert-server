@@ -3,7 +3,8 @@
 import pytest
 
 from mail import crypto, models
-from tests.conftest import CREATE, PASSWORD
+from tests.conftest import CREATE, PASSWORD, GreenMail, Stack
+from tests.support import AExecute, Mailbox, ProviderFor, Sync, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -23,22 +24,26 @@ def _payload(
     "host",
     ["127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "::1", "db", "0.0.0.0"],
 )
-async def test_internal_hosts_are_refused(aexecute, provider_for, host):
+async def test_internal_hosts_are_refused(
+    aexecute: AExecute, provider_for: ProviderFor, host: str
+) -> None:
     result = await aexecute(
         CREATE,
         {"input": _payload(await provider_for(), "x@kuvert.test", host, 993)},
         allow_errors=True,
     )
-    assert result.errors[0].extensions["code"] in (
+    assert error_code(result) in (
         "HOST_NOT_ALLOWED",
         "CONNECTION_FAILED",
     ), result.errors
     if host != "db":  # unresolvable outside the stack's network
-        assert result.errors[0].extensions["code"] == "HOST_NOT_ALLOWED"
+        assert error_code(result) == "HOST_NOT_ALLOWED"
     assert not await models.MailAccount.objects.aexists()
 
 
-async def test_plaintext_is_refused(aexecute, provider_for, backend_stack):
+async def test_plaintext_is_refused(
+    aexecute: AExecute, provider_for: ProviderFor, backend_stack: Stack
+) -> None:
     result = await aexecute(
         CREATE,
         {
@@ -52,12 +57,15 @@ async def test_plaintext_is_refused(aexecute, provider_for, backend_stack):
         },
         allow_errors=True,
     )
-    assert result.errors[0].extensions["code"] == "TLS_REQUIRED"
+    assert error_code(result) == "TLS_REQUIRED"
 
 
 async def test_wrong_password_is_refused_before_storing(
-    aexecute, provider_for, greenmail, backend_stack
-):
+    aexecute: AExecute,
+    provider_for: ProviderFor,
+    greenmail: GreenMail,
+    backend_stack: Stack,
+) -> None:
     address = greenmail.user()
     payload = {
         **_payload(
@@ -66,11 +74,13 @@ async def test_wrong_password_is_refused_before_storing(
         "password": "wrong",
     }
     result = await aexecute(CREATE, {"input": payload}, allow_errors=True)
-    assert result.errors[0].extensions["code"] == "AUTH_FAILED"
+    assert error_code(result) == "AUTH_FAILED"
     assert not await models.MailAccount.objects.aexists()
 
 
-async def test_credentials_are_encrypted_and_not_in_the_schema(mailbox, aexecute):
+async def test_credentials_are_encrypted_and_not_in_the_schema(
+    mailbox: Mailbox, aexecute: AExecute
+) -> None:
     box = await mailbox()
     account = await models.MailAccount.objects.aget(id=box["id"])
     assert account.secret != PASSWORD and crypto.decrypt(account.secret) == PASSWORD
@@ -81,7 +91,9 @@ async def test_credentials_are_encrypted_and_not_in_the_schema(mailbox, aexecute
     assert not names & {"secret", "password", "accessToken", "smtpSecret"}
 
 
-async def test_failed_sync_records_the_error_and_needs_reauth(mailbox, sync, aexecute):
+async def test_failed_sync_records_the_error_and_needs_reauth(
+    mailbox: Mailbox, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     await models.MailAccount.objects.filter(id=box["id"]).aupdate(
         secret=crypto.encrypt("changed-elsewhere")
@@ -91,7 +103,7 @@ async def test_failed_sync_records_the_error_and_needs_reauth(mailbox, sync, aex
         {"id": box["id"]},
         allow_errors=True,
     )
-    assert result.errors[0].extensions["code"] == "AUTH_FAILED"
+    assert error_code(result) == "AUTH_FAILED"
     account = (
         await aexecute(
             "query($id: ID!) { mailAccount(id: $id) { status lastErrorCode syncing } }",
@@ -108,7 +120,7 @@ async def test_failed_sync_records_the_error_and_needs_reauth(mailbox, sync, aex
         {"id": box["id"]},
         allow_errors=True,
     )
-    assert again.errors[0].extensions["code"] == "MAILBOX_INACTIVE"
+    assert error_code(again) == "MAILBOX_INACTIVE"
     # A new password brings it back.
     updated = await aexecute(
         "mutation($id: ID!, $pw: String!) { updateMailAccount(input: {id: $id, password: $pw}) { status lastError } }",

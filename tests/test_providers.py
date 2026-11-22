@@ -4,14 +4,27 @@ End to end against GreenMail and fakeoauth (which checks each client's secret). 
 """
 
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from django.core.management import call_command
 from django.utils import timezone
+from kante.context import HttpContext
+from pytest_django.fixtures import SettingsWrapper
 
 from mail import crypto, models
 from mail.scheduled import sync_all_mailboxes
-from tests.conftest import CREATE, OAUTH_CLIENT, PASSWORD, REDIRECT, make_provider
+from tests.conftest import (
+    CREATE,
+    OAUTH_CLIENT,
+    PASSWORD,
+    REDIRECT,
+    FakeOAuth,
+    GreenMail,
+    Stack,
+    make_provider,
+)
+from tests.support import AExecute, Mailbox, ProviderFor, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -30,7 +43,7 @@ START = "mutation($input: StartOAuthLinkInput!) { startOAuthLink(input: $input) 
 COMPLETE = "mutation($code: String!, $state: String!) { completeAuth(input: {code: $code, state: $state}) { status errorCode result { id } } }"
 
 
-def _fixed(backend_stack, **fields) -> dict:
+def _fixed(backend_stack: Stack, **fields: object) -> dict:
     """An IMAP provider fixed to the stack's GreenMail."""
     return {
         "input": {
@@ -51,7 +64,7 @@ def _fixed(backend_stack, **fields) -> dict:
     }
 
 
-def _gmail(**fields) -> dict:
+def _gmail(**fields: object) -> dict:
     return {
         "input": {
             "kind": "GMAIL",
@@ -64,7 +77,9 @@ def _gmail(**fields) -> dict:
     }
 
 
-async def _link_oauth(aexecute, fakeoauth, greenmail, provider: str) -> str:
+async def _link_oauth(
+    aexecute: AExecute, fakeoauth: FakeOAuth, greenmail: GreenMail, provider: str
+) -> str:
     session = (await aexecute(START, {"input": {"provider": provider}})).data[
         "startOAuthLink"
     ]
@@ -81,7 +96,7 @@ async def _link_oauth(aexecute, fakeoauth, greenmail, provider: str) -> str:
 # --- what the server can run -------------------------------------------------------------------
 
 
-async def test_the_kinds_say_how_their_mailboxes_log_in(aexecute):
+async def test_the_kinds_say_how_their_mailboxes_log_in(aexecute: AExecute) -> None:
     kinds = (
         await aexecute(
             "{ providerKinds { kind label authMethod capabilities { capability label description } } }"
@@ -107,8 +122,8 @@ async def test_the_kinds_say_how_their_mailboxes_log_in(aexecute):
 
 
 async def test_members_see_providers_but_only_admins_change_them(
-    aexecute, admin_context, backend_stack
-):
+    aexecute: AExecute, admin_context: HttpContext, backend_stack: Stack
+) -> None:
     created = (await aexecute(CREATE_OAUTH, _gmail(), context=admin_context)).data[
         "createOAuthProvider"
     ]
@@ -151,8 +166,8 @@ async def test_members_see_providers_but_only_admins_change_them(
 
 
 async def test_names_are_unique_and_settings_are_checked(
-    aexecute, admin_context, backend_stack
-):
+    aexecute: AExecute, admin_context: HttpContext, backend_stack: Stack
+) -> None:
     await aexecute(CREATE_OAUTH, _gmail(), context=admin_context)
 
     taken = await aexecute(
@@ -209,8 +224,8 @@ async def test_names_are_unique_and_settings_are_checked(
     )
 
     assert "already has a provider named" in taken.errors[0].message
-    assert internal.errors[0].extensions["code"] == "HOST_NOT_ALLOWED"
-    assert plain.errors[0].extensions["code"] == "TLS_REQUIRED"
+    assert error_code(internal) == "HOST_NOT_ALLOWED"
+    assert error_code(plain) == "TLS_REQUIRED"
     assert "protocol" in half.errors[0].message
     assert "only for Microsoft" in tenant.errors[0].message
     assert "redirect_urls" in nowhere.errors[0].message
@@ -222,7 +237,9 @@ async def test_names_are_unique_and_settings_are_checked(
 # --- IMAP providers ----------------------------------------------------------------------------
 
 
-async def test_an_open_provider_takes_any_server(aexecute, admin_context, mailbox):
+async def test_an_open_provider_takes_any_server(
+    aexecute: AExecute, admin_context: HttpContext, mailbox: Mailbox
+) -> None:
     open_ = (
         await aexecute(
             CREATE_SERVER, {"input": {"name": "Any server"}}, context=admin_context
@@ -245,8 +262,11 @@ async def test_an_open_provider_takes_any_server(aexecute, admin_context, mailbo
 
 
 async def test_a_fixed_provider_takes_only_the_login_and_its_mailboxes_follow_it(
-    aexecute, admin_context, greenmail, backend_stack
-):
+    aexecute: AExecute,
+    admin_context: HttpContext,
+    greenmail: GreenMail,
+    backend_stack: Stack,
+) -> None:
     fixed = (
         await aexecute(CREATE_SERVER, _fixed(backend_stack), context=admin_context)
     ).data["createServerProvider"]
@@ -322,8 +342,8 @@ async def test_a_fixed_provider_takes_only_the_login_and_its_mailboxes_follow_it
 
 
 async def test_an_oauth_provider_does_not_take_passwords(
-    aexecute, provider_for, greenmail
-):
+    aexecute: AExecute, provider_for: ProviderFor, greenmail: GreenMail
+) -> None:
     result = await aexecute(
         CREATE,
         {
@@ -345,8 +365,12 @@ async def test_an_oauth_provider_does_not_take_passwords(
 
 
 async def test_a_disabled_provider_links_syncs_and_sends_nothing(
-    aexecute, admin_context, mailbox, provider_for, greenmail
-):
+    aexecute: AExecute,
+    admin_context: HttpContext,
+    mailbox: Mailbox,
+    provider_for: ProviderFor,
+    greenmail: GreenMail,
+) -> None:
     box = await mailbox()
     provider = await provider_for("GENERIC")
     await aexecute(
@@ -377,7 +401,7 @@ async def test_a_disabled_provider_links_syncs_and_sends_nothing(
     scheduled = await sync_all_mailboxes("static_issuer#static_org")
     account = (await aexecute(ACCOUNT, {"id": box["id"]})).data["mailAccount"]
 
-    assert [r.errors[0].extensions["code"] for r in (synced, sent, tested, linked)] == [
+    assert [error_code(r) for r in (synced, sent, tested, linked)] == [
         "NOT_CONFIGURED"
     ] * 4
     assert scheduled == {"synced": 0, "skipped": 0, "failed": 0, "created": 0}
@@ -389,8 +413,12 @@ async def test_a_disabled_provider_links_syncs_and_sends_nothing(
 
 
 async def test_capabilities_decide_sending_and_scheduled_syncs(
-    aexecute, admin_context, mailbox, provider_for, greenmail
-):
+    aexecute: AExecute,
+    admin_context: HttpContext,
+    mailbox: Mailbox,
+    provider_for: ProviderFor,
+    greenmail: GreenMail,
+) -> None:
     box = await mailbox()
     provider = await provider_for("GENERIC")
     greenmail.deliver(box["address"], "Hello")
@@ -418,10 +446,7 @@ async def test_capabilities_decide_sending_and_scheduled_syncs(
     )
 
     assert receive_only["capabilities"] == [] and not can_send
-    assert (
-        sent.errors[0].extensions["code"] == "NOT_CONFIGURED"
-        and "Sending" in sent.errors[0].message
-    )
+    assert error_code(sent) == "NOT_CONFIGURED" and "Sending" in sent.errors[0].message
     assert skipped["synced"] == 0 and by_hand["created"] == 1
     assert (await sync_all_mailboxes("static_issuer#static_org"))["synced"] == 1
     assert (await aexecute(SEND, {"a": box["id"], "to": greenmail.user()})).data[
@@ -430,8 +455,11 @@ async def test_capabilities_decide_sending_and_scheduled_syncs(
 
 
 async def test_a_provider_with_mailboxes_cannot_be_deleted(
-    aexecute, admin_context, mailbox, provider_for
-):
+    aexecute: AExecute,
+    admin_context: HttpContext,
+    mailbox: Mailbox,
+    provider_for: ProviderFor,
+) -> None:
     box = await mailbox()
     provider = await provider_for("GENERIC")
 
@@ -453,8 +481,11 @@ async def test_a_provider_with_mailboxes_cannot_be_deleted(
 
 
 async def test_an_admins_oauth_client_links_mailboxes_and_refreshes_their_tokens(
-    aexecute, admin_context, fakeoauth, greenmail
-):
+    aexecute: AExecute,
+    admin_context: HttpContext,
+    fakeoauth: FakeOAuth,
+    greenmail: GreenMail,
+) -> None:
     ours = (await aexecute(CREATE_OAUTH, _gmail(), context=admin_context)).data[
         "createOAuthProvider"
     ]
@@ -514,8 +545,11 @@ async def test_an_admins_oauth_client_links_mailboxes_and_refreshes_their_tokens
 
 
 async def test_a_relink_can_move_a_mailbox_to_another_provider_of_its_kind(
-    aexecute, fakeoauth, greenmail, provider_for
-):
+    aexecute: AExecute,
+    fakeoauth: FakeOAuth,
+    greenmail: GreenMail,
+    provider_for: ProviderFor,
+) -> None:
     account_id = await _link_oauth(aexecute, fakeoauth, greenmail, fakeoauth.gmail)
     address = (await models.MailAccount.objects.aget(id=account_id)).email_address
     second = str(
@@ -563,8 +597,8 @@ async def test_a_relink_can_move_a_mailbox_to_another_provider_of_its_kind(
 
 
 async def test_mailboxes_from_before_providers_attach_to_the_first_one_of_their_kind(
-    aexecute, admin_context, authenticated_context
-):
+    aexecute: AExecute, admin_context: HttpContext, authenticated_context: HttpContext
+) -> None:
     from channels.db import database_sync_to_async
 
     def _loose() -> models.MailAccount:
@@ -593,8 +627,8 @@ async def test_mailboxes_from_before_providers_attach_to_the_first_one_of_their_
 
 
 def test_rotating_the_key_reencrypts_provider_secrets(
-    settings, tmp_path, authenticated_context
-):
+    settings: SettingsWrapper, tmp_path: Path, authenticated_context: HttpContext
+) -> None:
     from cryptography.fernet import Fernet
 
     provider = make_provider(authenticated_context.request.organization, "GMAIL")

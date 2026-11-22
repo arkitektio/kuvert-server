@@ -17,6 +17,8 @@ link a mailbox; only kuvert's admins set up the providers mailboxes are linked t
 * ``DjangoOptimizerExtension`` — batches/prefetches ORM access to avoid N+1s.
 """
 
+from typing import Any
+
 import strawberry
 import strawberry_django
 from arkitekt_datalayer import mutations as datalayer_mutations
@@ -37,19 +39,19 @@ from mail import types
 from mail.graphql import mutations, queries, subscriptions
 
 
-def field(scope: str = "kuvert_read", **kwargs):  # noqa: ANN201
+def field(scope: str = "kuvert_read", **kwargs: Any) -> Any:  # noqa: ANN401 -- as strawberry_django.field: the value of `x: T = field()`
     """A query field an app needs ``scope`` for (``kuvert_read``, unless it says otherwise)."""
     return strawberry_django.field(extensions=[AuthExtension(scopes=[scope])], **kwargs)
 
 
-def mutation(scope: str = "kuvert_write", **kwargs):  # noqa: ANN201
+def mutation(scope: str = "kuvert_write", **kwargs: Any) -> Any:  # noqa: ANN401 -- as strawberry_django.mutation: the value of `x: T = mutation()`
     """A write: an app needs ``scope`` for it (``kuvert_write``, unless it says otherwise), a member ``kuvert_editor``."""
     return strawberry_django.mutation(
         extensions=[AuthExtension(scopes=[scope], any_role_of=[EDITOR])], **kwargs
     )
 
 
-def upload_mutation(**kwargs):  # noqa: ANN201
+def upload_mutation(**kwargs: Any) -> Any:  # noqa: ANN401 -- as strawberry_django.mutation: the value of `x: T = upload_mutation()`
     """A mutation that hands out (or finishes) upload credentials: a write, gated by ``datalayer.upload_roles`` (``kuvert_editor`` when none are set)."""
     roles = load_config().upload_roles or [EDITOR]
     return strawberry_django.mutation(
@@ -57,7 +59,7 @@ def upload_mutation(**kwargs):  # noqa: ANN201
     )
 
 
-def admin_mutation(**kwargs):  # noqa: ANN201
+def admin_mutation(**kwargs: Any) -> Any:  # noqa: ANN401 -- as strawberry_django.mutation: the value of `x: T = admin_mutation()`
     """A mutation only kuvert's admins may run: an app needs ``kuvert_providers`` for it."""
     return strawberry_django.mutation(
         extensions=[AuthExtension(scopes=["kuvert_providers"], any_role_of=[ADMIN])],
@@ -65,7 +67,7 @@ def admin_mutation(**kwargs):  # noqa: ANN201
     )
 
 
-def subscription(**kwargs):  # noqa: ANN201
+def subscription(**kwargs: Any) -> Any:  # noqa: ANN401 -- as strawberry.subscription: the value of `x: T = subscription()`
     """A subscription: what it streams is read, so an app needs ``kuvert_read`` for it."""
     return strawberry.subscription(
         extensions=[AuthSubscribeExtension(scopes=["kuvert_read"])], **kwargs

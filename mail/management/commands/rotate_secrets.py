@@ -5,6 +5,8 @@ Put a new key on the first line of the key file, restart, run this, then drop th
     python manage.py rotate_secrets
 """
 
+from typing import Any
+
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
@@ -20,7 +22,7 @@ FIELDS = {
 class Command(BaseCommand):
     help = "Re-encrypt stored mailbox and provider credentials with the newest key."
 
-    def handle(self, *args, **options) -> None:  # noqa: ANN002, ANN003
+    def handle(self, *args: Any, **options: Any) -> None:
         rotated = 0
         with transaction.atomic():
             for model, fields in FIELDS.items():

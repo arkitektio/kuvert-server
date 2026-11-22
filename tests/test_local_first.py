@@ -4,15 +4,20 @@ Real GreenMail (UIDPLUS and MOVE, no CONDSTORE); the server is checked behind th
 """
 
 import threading
+from typing import Protocol
 
 import pytest
 from asgiref.sync import sync_to_async
 from django.db import connections
 from django.utils import timezone
+from kante.context import HttpContext
+from pytest_django.fixtures import SettingsWrapper
 
 from mail import models
 from mail import sync as mail_sync
 from mail.scheduled import flush_mail_changes
+from tests.conftest import GreenMail
+from tests.support import AExecute, Data, Mailbox, Sync
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -23,18 +28,24 @@ UNDO = "mutation($ids: [ID!]!) { undoMailChanges(input: {messages: $ids}) { id f
 SETTINGS = "mutation($input: UpdateMailAccountInput!) { updateMailAccount(input: $input) { pushSeen pushDeletes } }"
 
 
+class Writeback(Protocol):
+    """``writeback``: change ``writeback.*`` for one test."""
+
+    def __call__(self, **values: object) -> None: ...
+
+
 @pytest.fixture
-def writeback(settings):
+def writeback(settings: SettingsWrapper) -> Writeback:
     """Change ``writeback.*`` for one test."""
 
-    def _set(**values) -> None:  # noqa: ANN003
+    def _set(**values: object) -> None:
         settings.KUVERT_WRITEBACK = {**settings.KUVERT_WRITEBACK, **values}
 
     return _set
 
 
 @pytest.fixture
-async def box(mailbox, greenmail, sync):
+async def box(mailbox: Mailbox, greenmail: GreenMail, sync: Sync) -> Data:
     box = await mailbox()
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Archive")
@@ -56,7 +67,9 @@ async def box(mailbox, greenmail, sync):
     return {**box, "messages": ids, "folders": folders}
 
 
-def server(greenmail, address: str, folder: str = "INBOX") -> dict[str, set[str]]:
+def server(
+    greenmail: GreenMail, address: str, folder: str = "INBOX"
+) -> dict[str, set[str]]:
     """Subject → flags of ``folder`` on the server."""
     with greenmail.imap(address) as imap:
         imap.select_folder(folder, readonly=True)
@@ -75,7 +88,7 @@ def server(greenmail, address: str, folder: str = "INBOX") -> dict[str, set[str]
 
 
 def store_behind(
-    greenmail,
+    greenmail: GreenMail,
     address: str,
     subject: str,
     add: list[str] = (),
@@ -93,8 +106,12 @@ def store_behind(
 
 
 async def test_a_change_shows_at_once_and_reaches_the_server_later(
-    box, aexecute, greenmail, sync, writeback
-):
+    box: Data,
+    aexecute: AExecute,
+    greenmail: GreenMail,
+    sync: Sync,
+    writeback: Writeback,
+) -> None:
     writeback(push_inline=False)
     one = box["messages"]["One"]
     read = (await aexecute(READ, {"ids": [one], "read": True})).data["markMessagesRead"]
@@ -127,8 +144,12 @@ async def test_a_change_shows_at_once_and_reaches_the_server_later(
 
 
 async def test_a_pending_change_survives_a_sync(
-    box, aexecute, greenmail, sync, writeback
-):
+    box: Data,
+    aexecute: AExecute,
+    greenmail: GreenMail,
+    sync: Sync,
+    writeback: Writeback,
+) -> None:
     """Not yet due (an undo window), so the sync pulls the server's flags -- the local change stays on top."""
     writeback(push_inline=False, undo_seconds_flags=3600)
     one = box["messages"]["One"]
@@ -144,8 +165,8 @@ async def test_a_pending_change_survives_a_sync(
 
 
 async def test_toggling_back_cancels_the_queued_change(
-    box, aexecute, greenmail, writeback
-):
+    box: Data, aexecute: AExecute, greenmail: GreenMail, writeback: Writeback
+) -> None:
     writeback(push_inline=False)
     one = box["messages"]["One"]
     await aexecute(READ, {"ids": [one], "read": True})
@@ -157,8 +178,12 @@ async def test_toggling_back_cancels_the_queued_change(
 
 
 async def test_a_move_keeps_its_id_and_can_be_undone(
-    box, aexecute, greenmail, sync, writeback
-):
+    box: Data,
+    aexecute: AExecute,
+    greenmail: GreenMail,
+    sync: Sync,
+    writeback: Writeback,
+) -> None:
     writeback(undo_seconds_moves=3600)
     one = box["messages"]["One"]
     moved = (await aexecute(MOVE, {"ids": [one], "f": box["folders"]["Archive"]})).data[
@@ -191,7 +216,9 @@ async def test_a_move_keeps_its_id_and_can_be_undone(
     assert set(server(greenmail, box["address"], "Archive")) == set()
 
 
-async def test_a_move_by_role_finds_the_mailbox_folder(box, aexecute, writeback):
+async def test_a_move_by_role_finds_the_mailbox_folder(
+    box: Data, aexecute: AExecute, writeback: Writeback
+) -> None:
     """`role` moves each message into its own mailbox's folder of that role; a mailbox without one is refused."""
     writeback(push_inline=False)
     await models.MailFolder.objects.filter(id=box["folders"]["Archive"]).aupdate(
@@ -218,7 +245,9 @@ async def test_a_move_by_role_finds_the_mailbox_folder(box, aexecute, writeback)
     assert both.errors and "either a folder or a role" in both.errors[0].message
 
 
-async def test_threads_filter_lists_every_mail_of_several_conversations(box, aexecute):
+async def test_threads_filter_lists_every_mail_of_several_conversations(
+    box: Data, aexecute: AExecute
+) -> None:
     threads = {
         str(m.thread_id): str(m.id)
         async for m in models.Message.objects.filter(account_id=box["id"])
@@ -235,8 +264,12 @@ async def test_threads_filter_lists_every_mail_of_several_conversations(box, aex
 
 
 async def test_a_move_pushed_by_a_crashed_run_is_not_pushed_twice(
-    box, aexecute, greenmail, sync, writeback
-):
+    box: Data,
+    aexecute: AExecute,
+    greenmail: GreenMail,
+    sync: Sync,
+    writeback: Writeback,
+) -> None:
     """The server has the move (the answer was lost): the retry finds the message in the target and adopts it."""
     writeback(push_inline=False)
     one = box["messages"]["One"]
@@ -257,8 +290,12 @@ async def test_a_move_pushed_by_a_crashed_run_is_not_pushed_twice(
 
 
 async def test_a_delete_waits_for_its_undo_window(
-    box, aexecute, greenmail, sync, writeback
-):
+    box: Data,
+    aexecute: AExecute,
+    greenmail: GreenMail,
+    sync: Sync,
+    writeback: Writeback,
+) -> None:
     writeback(undo_seconds_deletes=3600)
     two = box["messages"]["Two"]
     assert (await aexecute(DELETE, {"ids": [two], "p": True})).data[
@@ -290,7 +327,9 @@ async def test_a_delete_waits_for_its_undo_window(
     ).aexists()
 
 
-async def test_push_seen_off_keeps_read_state_here(box, aexecute, greenmail, sync):
+async def test_push_seen_off_keeps_read_state_here(
+    box: Data, aexecute: AExecute, greenmail: GreenMail, sync: Sync
+) -> None:
     await aexecute(SETTINGS, {"input": {"id": box["id"], "pushSeen": False}})
     one, two = box["messages"]["One"], box["messages"]["Two"]
     read = (await aexecute(READ, {"ids": [one], "read": True})).data["markMessagesRead"]
@@ -323,7 +362,9 @@ async def test_push_seen_off_keeps_read_state_here(box, aexecute, greenmail, syn
     assert not await models.LocalPin.objects.filter(account_id=box["id"]).aexists()
 
 
-async def test_revert_to_server_drops_local_state(box, aexecute, greenmail):
+async def test_revert_to_server_drops_local_state(
+    box: Data, aexecute: AExecute, greenmail: GreenMail
+) -> None:
     await aexecute(SETTINGS, {"input": {"id": box["id"], "pushSeen": False}})
     one = box["messages"]["One"]
     await aexecute(READ, {"ids": [one], "read": True})
@@ -336,7 +377,9 @@ async def test_revert_to_server_drops_local_state(box, aexecute, greenmail):
     assert reverted == [{"isRead": False, "syncState": "SYNCED"}]
 
 
-async def test_push_deletes_off_hides_mail_here_only(box, aexecute, greenmail, sync):
+async def test_push_deletes_off_hides_mail_here_only(
+    box: Data, aexecute: AExecute, greenmail: GreenMail, sync: Sync
+) -> None:
     await aexecute(SETTINGS, {"input": {"id": box["id"], "pushDeletes": False}})
     three = box["messages"]["Three"]
     await aexecute(DELETE, {"ids": [three], "p": False})
@@ -358,8 +401,8 @@ async def test_push_deletes_off_hides_mail_here_only(box, aexecute, greenmail, s
 
 
 async def test_a_local_delete_survives_a_uidvalidity_reset(
-    box, aexecute, greenmail, sync
-):
+    box: Data, aexecute: AExecute, greenmail: GreenMail, sync: Sync
+) -> None:
     """The folder is replaced with the same message in it: the refetch adopts the hidden row instead of showing the mail again."""
     await aexecute(
         MOVE, {"ids": [box["messages"]["Three"]], "f": box["folders"]["Archive"]}
@@ -386,7 +429,9 @@ CATEGORY = "mutation($input: CreateCategoryInput!) { createCategory(input: $inpu
 CATEGORIZE = "mutation($ids: [ID!]!, $add: [ID!]!) { categorizeMessages(input: {messages: $ids, add: $add}) { id categories { name } } }"
 
 
-async def test_categories_local_and_as_keywords(box, aexecute, greenmail, sync):
+async def test_categories_local_and_as_keywords(
+    box: Data, aexecute: AExecute, greenmail: GreenMail, sync: Sync
+) -> None:
     work = (
         await aexecute(
             CATEGORY,
@@ -437,7 +482,9 @@ async def test_categories_local_and_as_keywords(box, aexecute, greenmail, sync):
     assert {m["subject"] for m in in_work} == {"One", "Two"}
 
 
-async def test_an_unreachable_server_keeps_the_change_queued(box, aexecute, greenmail):
+async def test_an_unreachable_server_keeps_the_change_queued(
+    box: Data, aexecute: AExecute, greenmail: GreenMail
+) -> None:
     one = box["messages"]["One"]
     await models.MailAccount.objects.filter(id=box["id"]).aupdate(
         incoming_port=1
@@ -464,7 +511,9 @@ async def test_an_unreachable_server_keeps_the_change_queued(box, aexecute, gree
     assert (await models.MailAccount.objects.aget(id=box["id"])).last_error_code is None
 
 
-async def test_a_held_lease_defers_the_push(box, aexecute, greenmail, writeback):
+async def test_a_held_lease_defers_the_push(
+    box: Data, aexecute: AExecute, greenmail: GreenMail, writeback: Writeback
+) -> None:
     """A sync holds the mailbox: pushing now does nothing (that sync pushes); once it is free, the push goes through."""
     writeback(push_inline=False)
     await aexecute(READ, {"ids": [box["messages"]["One"]], "read": True})
@@ -478,7 +527,9 @@ async def test_a_held_lease_defers_the_push(box, aexecute, greenmail, writeback)
     assert "\\Seen" in server(greenmail, box["address"])["One"]
 
 
-async def test_two_pushes_at_once_push_once(box, aexecute, greenmail, writeback):
+async def test_two_pushes_at_once_push_once(
+    box: Data, aexecute: AExecute, greenmail: GreenMail, writeback: Writeback
+) -> None:
     """Real threads: whichever gets the lease pushes; the other finds the mailbox held or nothing left."""
     writeback(push_inline=False)
     await aexecute(
@@ -502,8 +553,13 @@ async def test_two_pushes_at_once_push_once(box, aexecute, greenmail, writeback)
 
 
 async def test_sync_state_filter_stays_in_its_mailbox(
-    box, aexecute, mailbox, greenmail, sync, other_org_context
-):
+    box: Data,
+    aexecute: AExecute,
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    other_org_context: HttpContext,
+) -> None:
     """The same mail in another organization's mailbox, kept read there only, changes nothing here."""
     other = await mailbox(context=other_org_context)
     greenmail.deliver(other["address"], "One", message_id=f"one.{box['address']}")

@@ -16,10 +16,11 @@ request that queued a change) takes the same lease.
 """
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import ParamSpec, TypeVar
 
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
@@ -31,7 +32,10 @@ from django.utils import timezone
 from mail import accounts, models
 from mail.channels import announce_changes
 from mail.errors import AlreadySyncing, SyncTooSoon, code_for
-from mail.protocols.clients import open_imap, open_pop3
+from mail.protocols.clients import GuardedIMAPClient, GuardedPOP3, open_imap, open_pop3
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +118,9 @@ def _mark_synced(account_id: int) -> None:
 
 
 @contextmanager
-def incoming_session(account: models.MailAccount) -> Iterator[object]:
+def incoming_session(
+    account: models.MailAccount,
+) -> Iterator[GuardedIMAPClient | GuardedPOP3]:
     """A logged-in client of the mailbox's incoming server (IMAP or POP3), logged out afterwards."""
     endpoint, credentials = (
         accounts.incoming_endpoint(account),
@@ -216,10 +222,12 @@ def _back_off(account_id: int) -> None:
     ).update(push_after=now + wait)
 
 
-def in_worker(fn, *args, **kwargs):  # noqa: ANN001, ANN201
+def in_worker(
+    fn: Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs
+) -> Awaitable[_R]:
     """Run blocking ``fn`` (network and ORM) in a worker thread of its own, closing its DB connections after."""
 
-    def call():  # noqa: ANN202
+    def call() -> _R:
         try:
             return fn(*args, **kwargs)
         finally:

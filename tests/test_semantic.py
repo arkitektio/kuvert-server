@@ -3,11 +3,15 @@
 import pytest
 
 from mail import models
+from tests.conftest import GreenMail
+from tests.support import AExecute, Mailbox, Sync
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-async def test_search_and_similar(mailbox, greenmail, sync, aexecute):
+async def test_search_and_similar(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     greenmail.deliver(
         box["address"],

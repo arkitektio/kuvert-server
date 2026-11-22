@@ -5,11 +5,15 @@ import asyncio
 import pytest
 
 from mail import models
+from tests.conftest import GreenMail
+from tests.support import AExecute, Mailbox, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-async def test_concurrent_syncs(mailbox, greenmail, aexecute):
+async def test_concurrent_syncs(
+    mailbox: Mailbox, greenmail: GreenMail, aexecute: AExecute
+) -> None:
     box = await mailbox()
     for n in range(20):
         greenmail.deliver(box["address"], f"m{n}")
@@ -21,7 +25,7 @@ async def test_concurrent_syncs(mailbox, greenmail, aexecute):
     ok = [r for r in results if not r.errors]
     busy = [r for r in results if r.errors]
     assert sum(r.data["syncMailAccount"]["created"] for r in ok) == 20
-    assert all(r.errors[0].extensions["code"] == "SYNC_IN_PROGRESS" for r in busy)
+    assert all(error_code(r) == "SYNC_IN_PROGRESS" for r in busy)
     assert await models.Message.objects.filter(account_id=box["id"]).acount() == 20
     account = await models.MailAccount.objects.aget(id=box["id"])
     assert account.sync_lease_until is None and account.last_error is None

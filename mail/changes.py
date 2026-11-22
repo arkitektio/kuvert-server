@@ -15,12 +15,14 @@ delete only hides the message here.
 """
 
 import re
+from collections.abc import Collection
 from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from kante.context import User
 
 from mail import models, overlay, threads
 from mail.errors import MailError, unsupported
@@ -105,7 +107,9 @@ def _reopen(change: models.MailChange) -> None:
     )
 
 
-def _queue_flags(row: models.Message, ops: list[tuple[str, bool]], user) -> None:  # noqa: ANN001
+def _queue_flags(
+    row: models.Message, ops: list[tuple[str, bool]], user: User | None
+) -> None:
     change = (
         models.MailChange.objects.select_for_update()
         .filter(message=row, kind=Kind.FLAGS)
@@ -173,8 +177,8 @@ def set_flags(
     messages: list[models.Message],
     add: list[str],
     remove: list[str],
-    user=None,
-) -> list[models.Message]:  # noqa: ANN001
+    user: User | None = None,
+) -> list[models.Message]:
     """Set and clear flags of messages of one mailbox, here at once; queue or pin them (see the module docstring)."""
     ops = [(flag, True) for flag in add] + [(flag, False) for flag in remove]
     with transaction.atomic():
@@ -204,10 +208,10 @@ def move(
     account: models.MailAccount,
     messages: list[models.Message],
     destination: models.MailFolder,
-    user=None,
+    user: User | None = None,
     *,
     policy: str = "push_moves",
-) -> list[models.Message]:  # noqa: ANN001
+) -> list[models.Message]:
     """Move messages to another folder of their mailbox, here at once; the move is queued. Rows keep their ids."""
     if account.protocol != models.Protocol.IMAP:
         raise unsupported("move messages between folders")
@@ -297,8 +301,8 @@ def delete(
     account: models.MailAccount,
     messages: list[models.Message],
     permanent: bool = False,
-    user=None,
-) -> int:  # noqa: ANN001
+    user: User | None = None,
+) -> int:
     """Delete messages here at once: into Trash (a queued move), or for good (a queued expunge)."""
     if account.protocol == models.Protocol.POP3 or not account.push_deletes:
         with transaction.atomic():
@@ -446,8 +450,8 @@ def revert_to_server(
 
 
 def apply_policy(
-    account: models.MailAccount, before: dict[str, bool], user=None
-) -> None:  # noqa: ANN001
+    account: models.MailAccount, before: dict[str, bool], user: User | None = None
+) -> None:
     """After ``push_*`` settings changed: pins of a flag now pushed are queued, queued changes of a flag now kept local are pinned."""
     toggles = (*TOGGLES.values(), KEYWORD_TOGGLE)
     turned_on = {t for t in toggles if not before[t] and getattr(account, t)}
@@ -541,7 +545,7 @@ def keyword_for(account: models.MailAccount, name: str) -> str:
     return keyword
 
 
-def _copies(account: models.MailAccount, keys) -> list[models.Message]:  # noqa: ANN001
+def _copies(account: models.MailAccount, keys: Collection[str]) -> list[models.Message]:
     return list(
         models.Message.objects.filter(
             account=account, message_key__in=keys, deleted_at=None
@@ -564,8 +568,8 @@ def categorize(
     messages: list[models.Message],
     add: list[models.Category],
     remove: list[models.Category],
-    user=None,
-) -> list[models.Message]:  # noqa: ANN001
+    user: User | None = None,
+) -> list[models.Message]:
     """Put messages into categories and take them out: every copy of each message, here at once."""
     if any(c.account_id != account.id for c in [*add, *remove]):
         raise MailError(
@@ -635,8 +639,8 @@ def update_category(
     sync: str | None = None,
     keyword: str | None = None,
     remove_keywords: bool = False,
-    user=None,
-) -> models.Category:  # noqa: ANN001
+    user: User | None = None,
+) -> models.Category:
     """Rename, recolor, re-key or move a category between LOCAL and KEYWORD, keeping its messages."""
     account = category.account
     with transaction.atomic():
@@ -696,8 +700,8 @@ def update_category(
 
 
 def delete_category(
-    category: models.Category, remove_keywords: bool = False, user=None
-) -> None:  # noqa: ANN001
+    category: models.Category, remove_keywords: bool = False, user: User | None = None
+) -> None:
     """Delete a category; a KEYWORD one's keyword stays on the messages unless ``remove_keywords``."""
     with transaction.atomic():
         if category.sync == models.CategorySync.KEYWORD and remove_keywords:

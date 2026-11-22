@@ -24,13 +24,17 @@ either way -- a FAILED change still shows, and can be retried or undone.
 """
 
 import logging
+import poplib
 from collections import defaultdict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import QuerySet
 from django.utils import timezone
+from imapclient import IMAPClient
 
 from mail import models, overlay
 from mail.errors import MailError, code_for
@@ -83,7 +87,7 @@ class PushResult:
     touched_folders: set[int] = field(default_factory=set)
 
 
-def _due(account_id: int):  # noqa: ANN202
+def _due(account_id: int) -> QuerySet[models.MailChange]:
     return models.MailChange.objects.filter(
         account_id=account_id,
         state=models.MailChangeState.PENDING,
@@ -98,14 +102,14 @@ def has_due(account_id: int) -> bool:
 # --- IMAP helpers --------------------------------------------------------------------------------
 
 
-def _decode(values) -> list[str]:  # noqa: ANN001
+def _decode(values: Iterable[object] | None) -> list[str]:
     return [v.decode() if isinstance(v, bytes) else str(v) for v in values or ()]
 
 
 class _Session:
     """The IMAP client and the folder it has selected (read-write)."""
 
-    def __init__(self, client) -> None:  # noqa: ANN001
+    def __init__(self, client: IMAPClient) -> None:
         self.client = client
         self.path: str | None = None
         self.uidvalidity: int | None = None
@@ -164,7 +168,7 @@ def _uid_set(text: str) -> list[int]:
     return out
 
 
-def _pop_copyuid(client) -> tuple[int, dict[int, int]] | None:  # noqa: ANN001
+def _pop_copyuid(client: IMAPClient) -> tuple[int, dict[int, int]] | None:
     """The last COPYUID response code (UIDPLUS): the destination's UIDVALIDITY and old UID → new UID."""
     values = client._imap.untagged_responses.pop("COPYUID", None)
     if not values:
@@ -172,12 +176,14 @@ def _pop_copyuid(client) -> tuple[int, dict[int, int]] | None:  # noqa: ANN001
     raw = values[-1].decode() if isinstance(values[-1], bytes) else str(values[-1])
     try:
         uidvalidity, source, destination = raw.split()
-        return int(uidvalidity), dict(zip(_uid_set(source), _uid_set(destination)))
+        return int(uidvalidity), dict(
+            zip(_uid_set(source), _uid_set(destination), strict=False)
+        )
     except ValueError:
         return None
 
 
-def _expunge(client, uids: list[int]) -> None:  # noqa: ANN001
+def _expunge(client: IMAPClient, uids: list[int]) -> None:
     """Expunge exactly ``uids``; without UIDPLUS only when no other message of the folder is marked deleted."""
     if client.has_capability("UIDPLUS"):
         client.delete_messages(uids, silent=True)
@@ -349,8 +355,11 @@ def _push_flag_chunk(
 
 
 def _push_flag_batches(
-    session: _Session, changes: list[models.MailChange], result: PushResult, renew
-) -> list[models.MailChange]:  # noqa: ANN001
+    session: _Session,
+    changes: list[models.MailChange],
+    result: PushResult,
+    renew: Callable[[], None],
+) -> list[models.MailChange]:
     """Push flag changes grouped by folder and flags; returns the ones to push one at a time."""
     rows = models.Message.objects.in_bulk(
         [c.message_id for c in changes if c.message_id]
@@ -603,11 +612,11 @@ def resolve(account: models.MailAccount, final: bool = False) -> int:
 
 
 def _flush_pop3(
-    client,
+    client: poplib.POP3,
     account: models.MailAccount,
     changes: list[models.MailChange],
     result: PushResult,
-) -> None:  # noqa: ANN001
+) -> None:
     _, lines, _ = client.uidl()
     numbers = {
         uidl.strip(): int(number)
@@ -639,7 +648,7 @@ def _flush_pop3(
             result.pushed += 1
 
 
-def flush(client, account: models.MailAccount) -> PushResult:  # noqa: ANN001
+def flush(client: IMAPClient | poplib.POP3, account: models.MailAccount) -> PushResult:
     """Push the mailbox's due changes over a logged-in client (the caller holds the lease)."""
     result = PushResult()
     resolve(account)

@@ -3,17 +3,21 @@
 import pytest
 
 from mail import models
+from tests.conftest import GreenMail
+from tests.support import AExecute, Mailbox, Sync, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def _server_count(greenmail, address: str) -> int:
+def _server_count(greenmail: GreenMail, address: str) -> int:
     with greenmail.imap(address) as imap:  # GreenMail's IMAP sees the same INBOX
         imap.select_folder("INBOX", readonly=True)
         return len(imap.search("ALL"))
 
 
-async def test_pop3_sync_and_mirror(mailbox, greenmail, sync, aexecute):
+async def test_pop3_sync_and_mirror(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox(protocol="POP3")
     assert "UIDL" in box["capabilities"]
     greenmail.deliver(box["address"], "Pop one")
@@ -47,7 +51,7 @@ async def test_pop3_sync_and_mirror(mailbox, greenmail, sync, aexecute):
         {"ids": [str(message.id)], "f": str(inbox.id)},
         allow_errors=True,
     )
-    assert moved.errors[0].extensions["code"] == "UNSUPPORTED_BY_PROTOCOL"
+    assert error_code(moved) == "UNSUPPORTED_BY_PROTOCOL"
 
     # Delete: DELE on the server, then the row.
     await aexecute(
@@ -66,8 +70,8 @@ async def test_pop3_sync_and_mirror(mailbox, greenmail, sync, aexecute):
 
 
 async def test_pop3_without_leave_on_server_downloads_and_deletes(
-    mailbox, greenmail, sync
-):
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync
+) -> None:
     box = await mailbox(protocol="POP3", popLeaveOnServer=False)
     greenmail.deliver(box["address"], "Take me")
     greenmail.wait_for(box["address"], 1)
@@ -78,7 +82,9 @@ async def test_pop3_without_leave_on_server_downloads_and_deletes(
     assert await models.Message.objects.filter(account_id=box["id"]).acount() == 1
 
 
-async def test_pop3_cannot_move_between_folders(mailbox, greenmail, sync, aexecute):
+async def test_pop3_cannot_move_between_folders(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     imap_box = await mailbox()
     box = await mailbox(protocol="POP3", address=imap_box["address"])
     greenmail.deliver(box["address"], "Stay")
@@ -94,6 +100,4 @@ async def test_pop3_cannot_move_between_folders(mailbox, greenmail, sync, aexecu
         {"ids": [str(pop_message.id)], "f": str(imap_inbox.id)},
         allow_errors=True,
     )
-    assert (
-        result.errors[0].extensions["code"] == "VALIDATION_ERROR"
-    )  # never across mailboxes
+    assert error_code(result) == "VALIDATION_ERROR"  # never across mailboxes

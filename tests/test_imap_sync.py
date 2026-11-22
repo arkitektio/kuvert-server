@@ -2,8 +2,11 @@
 
 import pytest
 from django.conf import settings as django_settings
+from pytest_django.fixtures import SettingsWrapper
 
 from mail import models
+from tests.conftest import GreenMail
+from tests.support import AExecute, Mailbox, Sync
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -18,7 +21,9 @@ query($account: ID!) {
 """
 
 
-async def test_first_sync_reads_inbox(mailbox, greenmail, sync, aexecute):
+async def test_first_sync_reads_inbox(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     greenmail.deliver(box["address"], "First", "Hello first")
     greenmail.deliver(
@@ -53,7 +58,9 @@ async def test_first_sync_reads_inbox(mailbox, greenmail, sync, aexecute):
     assert again["created"] == 0
 
 
-async def test_new_mail_after_first_sync(mailbox, greenmail, sync):
+async def test_new_mail_after_first_sync(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync
+) -> None:
     box = await mailbox()
     greenmail.deliver(box["address"], "Old")
     greenmail.wait_for(box["address"], 1)
@@ -63,7 +70,9 @@ async def test_new_mail_after_first_sync(mailbox, greenmail, sync):
     assert (await sync(box["id"]))["created"] == 1
 
 
-async def test_backfill_in_batches(mailbox, greenmail, sync, settings):
+async def test_backfill_in_batches(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, settings: SettingsWrapper
+) -> None:
     settings.KUVERT_SYNC = {**django_settings.KUVERT_SYNC, "batch_size": 3}
     box = await mailbox()
     for n in range(7):
@@ -98,7 +107,9 @@ async def _subjects(account_id: str) -> list[str]:
     ]
 
 
-async def test_flags_and_expunges_follow_the_server(mailbox, greenmail, sync):
+async def test_flags_and_expunges_follow_the_server(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync
+) -> None:
     box = await mailbox()
     greenmail.deliver(box["address"], "Keep")
     greenmail.deliver(box["address"], "Drop")
@@ -119,7 +130,9 @@ async def test_flags_and_expunges_follow_the_server(mailbox, greenmail, sync):
     assert set(message.flags) == {"\\Seen", "\\Flagged"}
 
 
-async def test_folders_are_discovered_with_roles(mailbox, greenmail, sync, aexecute):
+async def test_folders_are_discovered_with_roles(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Sent")
@@ -145,7 +158,9 @@ async def test_folders_are_discovered_with_roles(mailbox, greenmail, sync, aexec
     }
 
 
-async def test_uidvalidity_change_resyncs_the_folder(mailbox, greenmail, sync):
+async def test_uidvalidity_change_resyncs_the_folder(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync
+) -> None:
     box = await mailbox()
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Box")
@@ -174,7 +189,9 @@ async def test_uidvalidity_change_resyncs_the_folder(mailbox, greenmail, sync):
     assert all(m.uidvalidity == folder.uidvalidity for m in rows)
 
 
-async def test_threads_join_replies(mailbox, greenmail, sync, aexecute):
+async def test_threads_join_replies(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     root = greenmail.deliver(box["address"], "Plans", "Shall we?")
     greenmail.deliver(
@@ -195,7 +212,9 @@ async def test_threads_join_replies(mailbox, greenmail, sync, aexecute):
     ]
 
 
-async def test_one_run_is_capped_over_all_folders(mailbox, greenmail, sync, settings):
+async def test_one_run_is_capped_over_all_folders(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, settings: SettingsWrapper
+) -> None:
     settings.KUVERT_SYNC = {
         **django_settings.KUVERT_SYNC,
         "batch_size": 5,
@@ -217,7 +236,9 @@ async def test_one_run_is_capped_over_all_folders(mailbox, greenmail, sync, sett
     assert second["created"] == 2 and second["more"] is False
 
 
-async def test_junk_is_discovered_but_not_synced(mailbox, greenmail, sync, aexecute):
+async def test_junk_is_discovered_but_not_synced(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Spam")

@@ -4,8 +4,11 @@ from datetime import timedelta
 
 import pytest
 from django.utils import timezone
+from kante.context import HttpContext
 
 from mail import models
+from tests.conftest import GreenMail
+from tests.support import AExecute, Data, Mailbox, Sync, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -23,7 +26,7 @@ TASKS = (
 
 
 @pytest.fixture
-async def inbox(mailbox, greenmail, sync):
+async def inbox(mailbox: Mailbox, greenmail: GreenMail, sync: Sync) -> Data:
     """Two mailboxes of member A with a conversation each, and their thread ids."""
     work, private = await mailbox(name="Work"), await mailbox(name="Private")
     root = greenmail.deliver(
@@ -60,7 +63,9 @@ async def inbox(mailbox, greenmail, sync):
     }
 
 
-async def test_upsert_is_idempotent_and_spans_mailboxes(inbox, aexecute):
+async def test_upsert_is_idempotent_and_spans_mailboxes(
+    inbox: Data, aexecute: AExecute
+) -> None:
     link = {"source": "APP", "confidence": 0.9, "reason": "Travel mail"}
     first = (
         await aexecute(
@@ -110,7 +115,7 @@ async def test_upsert_is_idempotent_and_spans_mailboxes(inbox, aexecute):
     assert await models.Task.objects.acount() == 1
 
 
-async def test_many_to_many_and_thread_filters(inbox, aexecute):
+async def test_many_to_many_and_thread_filters(inbox: Data, aexecute: AExecute) -> None:
     one = (
         await aexecute(
             UPSERT,
@@ -165,7 +170,9 @@ async def test_many_to_many_and_thread_filters(inbox, aexecute):
     assert (await aexecute(unsorted)).data["threads"] == [{"id": inbox["hotel"]}]
 
 
-async def test_status_snooze_pin_and_active_view(inbox, aexecute):
+async def test_status_snooze_pin_and_active_view(
+    inbox: Data, aexecute: AExecute
+) -> None:
     ids = []
     for key in ("x", "y", "z"):
         ids.append(
@@ -214,7 +221,7 @@ async def test_status_snooze_pin_and_active_view(inbox, aexecute):
     assert (await aexecute(TASKS, {"f": {"active": True}})).data["tasksCount"] == 3
 
 
-async def test_pinned_order_spans_pages(inbox, aexecute):
+async def test_pinned_order_spans_pages(inbox: Data, aexecute: AExecute) -> None:
     """Pinned first is the server's order, so a pinned task past the first page still leads it."""
     ids = [
         (
@@ -235,7 +242,7 @@ async def test_pinned_order_spans_pages(inbox, aexecute):
     ]
 
 
-async def test_lists(inbox, aexecute):
+async def test_lists(inbox: Data, aexecute: AExecute) -> None:
     travel = (
         await aexecute(
             'mutation { createTaskList(input: {name: "Travel", color: "#4f86f7"}) { id } }'
@@ -260,7 +267,7 @@ async def test_lists(inbox, aexecute):
     assert (await aexecute(TASKS, {"f": {"noList": True}})).data["tasksCount"] == 2
 
 
-async def test_duplicate_external_key_on_create_is_refused(aexecute):
+async def test_duplicate_external_key_on_create_is_refused(aexecute: AExecute) -> None:
     await aexecute(
         'mutation { createTask(input: {title: "a", externalKey: "k"}) { id } }'
     )
@@ -268,10 +275,12 @@ async def test_duplicate_external_key_on_create_is_refused(aexecute):
         'mutation { createTask(input: {title: "b", externalKey: "k"}) { id } }',
         allow_errors=True,
     )
-    assert again.errors[0].extensions["code"] == "VALIDATION_ERROR"
+    assert error_code(again) == "VALIDATION_ERROR"
 
 
-async def test_links_survive_moves_and_resyncs(inbox, aexecute, greenmail, sync):
+async def test_links_survive_moves_and_resyncs(
+    inbox: Data, aexecute: AExecute, greenmail: GreenMail, sync: Sync
+) -> None:
     task = (
         await aexecute(
             UPSERT,
@@ -333,7 +342,9 @@ async def test_links_survive_moves_and_resyncs(inbox, aexecute, greenmail, sync)
     ).data["task"]["threadCount"] == 1
 
 
-async def test_an_unlinked_thread_emptied_is_deleted(inbox, aexecute, greenmail, sync):
+async def test_an_unlinked_thread_emptied_is_deleted(
+    inbox: Data, aexecute: AExecute, greenmail: GreenMail, sync: Sync
+) -> None:
     """Only a linked thread is kept without messages; unlinking lets it go."""
     task = (
         await aexecute(
@@ -363,8 +374,11 @@ async def test_an_unlinked_thread_emptied_is_deleted(inbox, aexecute, greenmail,
 
 
 async def test_tasks_are_personal(
-    inbox, aexecute, colleague_context, other_org_context
-):
+    inbox: Data,
+    aexecute: AExecute,
+    colleague_context: HttpContext,
+    other_org_context: HttpContext,
+) -> None:
     task = (
         await aexecute(
             UPSERT,
@@ -398,7 +412,7 @@ async def test_tasks_are_personal(
             result = await aexecute(
                 document, {"id": value}, context=context, allow_errors=True
             )
-            assert result.errors[0].extensions["code"] == "NOT_FOUND"
+            assert error_code(result) == "NOT_FOUND"
     # A colleague's own task cannot take a conversation they cannot see.
     own = (
         await aexecute(
@@ -412,12 +426,17 @@ async def test_tasks_are_personal(
         context=colleague_context,
         allow_errors=True,
     )
-    assert stolen.errors[0].extensions["code"] == "NOT_FOUND"
+    assert error_code(stolen) == "NOT_FOUND"
 
 
 async def test_links_follow_mailbox_sharing(
-    mailbox, greenmail, sync, aexecute, colleague_context, authenticated_context
-):
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    aexecute: AExecute,
+    colleague_context: HttpContext,
+    authenticated_context: HttpContext,
+) -> None:
     """A colleague's task over a shared mailbox's thread loses it when sharing ends, and gets it back."""
     shared = await mailbox()
     greenmail.deliver(shared["address"], "Team request")

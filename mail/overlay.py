@@ -18,6 +18,7 @@ the message and survive what sync does to rows (moves elsewhere, UIDVALIDITY res
 import hashlib
 from collections import defaultdict
 from collections.abc import Iterable
+from datetime import datetime
 
 from django.db.models import Q
 
@@ -28,8 +29,12 @@ OPEN_STATES = (models.MailChangeState.PENDING, models.MailChangeState.FAILED)
 
 
 def key_parts(
-    message_id: str | None, sender_address: str, date, subject: str, size: int
-) -> str:  # noqa: ANN001
+    message_id: str | None,
+    sender_address: str,
+    date: datetime | None,
+    subject: str,
+    size: int,
+) -> str:
     """The message key: the Message-ID, else a hash of what identifies the message across folders."""
     if message_id:
         return message_id

@@ -14,6 +14,7 @@ import smtplib
 import socket
 import ssl
 from dataclasses import dataclass
+from typing import Any
 
 from imapclient import IMAPClient
 from imapclient import exceptions as imap_exceptions
@@ -201,7 +202,7 @@ def pop3_capabilities(client: poplib.POP3) -> list[str]:
 class GuardedSMTP(smtplib.SMTP):
     """An ``smtplib.SMTP`` whose socket goes through the SSRF guard (implicit TLS when ``tls`` is given)."""
 
-    def __init__(self, tls: ssl.SSLContext | None, **kwargs) -> None:
+    def __init__(self, tls: ssl.SSLContext | None, **kwargs: Any) -> None:
         self._tls = tls
         super().__init__(**kwargs)
 

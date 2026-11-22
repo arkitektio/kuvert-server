@@ -5,15 +5,23 @@ from email import policy
 
 import pytest
 from arkitekt_datalayer.models import BigFileStore
+from botocore.client import BaseClient
+from kante.context import HttpContext
 
 from mail import models, storage
+from tests.conftest import GreenMail, Stack
+from tests.support import AExecute, Mailbox, Sync, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 async def test_raw_and_attachments_are_stored(
-    mailbox, greenmail, sync, aexecute, datalayer
-):
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    aexecute: AExecute,
+    datalayer: BaseClient,
+) -> None:
     box = await mailbox()
     greenmail.deliver(
         box["address"],
@@ -48,7 +56,9 @@ async def test_raw_and_attachments_are_stored(
     )
 
 
-async def test_deleted_mail_orphans_its_files(mailbox, greenmail, sync, datalayer):
+async def test_deleted_mail_orphans_its_files(
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, datalayer: BaseClient
+) -> None:
     box = await mailbox()
     greenmail.deliver(
         box["address"],
@@ -78,8 +88,13 @@ FINISH = "mutation($id: String!) { finishBigfileUpload(input: {storeId: $id}) { 
 
 
 async def test_send_with_an_uploaded_attachment(
-    mailbox, greenmail, aexecute, datalayer, backend_stack, colleague_context
-):
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    aexecute: AExecute,
+    datalayer: BaseClient,
+    backend_stack: Stack,
+    colleague_context: HttpContext,
+) -> None:
     import boto3
     from botocore.config import Config
 
@@ -128,12 +143,17 @@ async def test_send_with_an_uploaded_attachment(
         context=colleague_context,
         allow_errors=True,
     )
-    assert refused.errors[0].extensions["code"] == "VALIDATION_ERROR"
+    assert error_code(refused) == "VALIDATION_ERROR"
 
 
 async def test_finish_upload_cannot_reach_stored_mail(
-    mailbox, greenmail, sync, aexecute, datalayer, colleague_context
-):
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    aexecute: AExecute,
+    datalayer: BaseClient,
+    colleague_context: HttpContext,
+) -> None:
     """A store id is sequential: finishing someone else's (or a synced message's) store must not hand out its read grant."""
     box = await mailbox()
     greenmail.deliver(
@@ -156,9 +176,7 @@ async def test_finish_upload_cannot_reach_stored_mail(
                     context=context,
                     allow_errors=True,
                 )
-                assert (
-                    result.errors and result.errors[0].extensions["code"] == "NOT_FOUND"
-                ), result
+                assert result.errors and error_code(result) == "NOT_FOUND", result
     raw = await BigFileStore.objects.aget(id=message.raw_id)
     assert raw.populated is True
 
@@ -171,4 +189,4 @@ async def test_finish_upload_cannot_reach_stored_mail(
     other = await aexecute(
         finish, {"id": grant["store"], "valid": True}, allow_errors=True
     )
-    assert other.errors[0].extensions["code"] == "NOT_FOUND"  # not the uploader
+    assert error_code(other) == "NOT_FOUND"  # not the uploader

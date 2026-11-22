@@ -8,9 +8,13 @@ from datetime import timedelta
 import pytest
 from authentikate.models import Organization
 from django.utils import timezone
+from kante.context import HttpContext
+from pytest_django.fixtures import SettingsWrapper
 
 from mail import models
 from mail.channels import auth_group, changes_group
+from tests.conftest import FakeOAuth, GreenMail
+from tests.support import AExecute, Mailbox, Subscribe, Sync, error_code
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -20,18 +24,25 @@ COUNT = "query($f: MailChangeFilter) { mailChangesCount(filters: $f) }"
 PUSH_ALL = "mutation($a: [ID!]) { pushAllMailChanges(accounts: $a) { account { id } pushed pending failed } }"
 CHANGES = "subscription($a: ID) { mailChanges(account: $a) { accountId pending failed pushed } }"
 SESSION = "state status errorCode"
-AUTH = "subscription($s: String!) { authSession(state: $s) { %s } }" % SESSION
+AUTH = "subscription($s: String!) { authSession(state: $s) { " + SESSION + " } }"
 START = (
-    "mutation($input: StartOAuthLinkInput!) { startOAuthLink(input: $input) { %s } }"
-    % SESSION
+    "mutation($input: StartOAuthLinkInput!) { startOAuthLink(input: $input) { "
+    + SESSION
+    + " } }"
 )
 COMPLETE = (
-    "mutation($state: String!, $error: String) { completeAuth(input: {state: $state, error: $error}) { %s } }"
-    % SESSION
+    "mutation($state: String!, $error: String) { completeAuth(input: {state: $state, error: $error}) { "
+    + SESSION
+    + " } }"
 )
 
 
-async def _box(mailbox, greenmail, sync, subjects=("One",)) -> dict:  # noqa: ANN001
+async def _box(
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    subjects: tuple[str, ...] = ("One",),
+) -> dict:
     box = await mailbox()
     with greenmail.imap(box["address"]) as imap:
         imap.create_folder("Archive")
@@ -57,8 +68,8 @@ async def _org_group() -> str:
 
 
 async def test_folders_filter_by_name_selectable_and_existence(
-    mailbox, greenmail, sync, aexecute
-):
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await _box(mailbox, greenmail, sync)
     await models.MailFolder.objects.filter(
         account_id=box["id"], path="Archive"
@@ -79,8 +90,12 @@ async def test_folders_filter_by_name_selectable_and_existence(
 
 
 async def test_counts_and_a_bulk_push_cover_every_mailbox(
-    mailbox, greenmail, sync, aexecute, settings
-):
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    aexecute: AExecute,
+    settings: SettingsWrapper,
+) -> None:
     settings.KUVERT_WRITEBACK = {**settings.KUVERT_WRITEBACK, "undo_seconds_moves": 600}
     first, second = (
         await _box(mailbox, greenmail, sync),
@@ -118,21 +133,25 @@ async def test_counts_and_a_bulk_push_cover_every_mailbox(
 
 
 async def test_a_bulk_push_only_reaches_visible_mailboxes(
-    mailbox, greenmail, sync, aexecute, colleague_context
-):
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    aexecute: AExecute,
+    colleague_context: HttpContext,
+) -> None:
     box = await _box(mailbox, greenmail, sync)
     hidden = await aexecute(
         PUSH_ALL, {"a": [box["id"]]}, context=colleague_context, allow_errors=True
     )
-    assert hidden.errors[0].extensions["code"] == "NOT_FOUND"
+    assert error_code(hidden) == "NOT_FOUND"
     assert (await aexecute(PUSH_ALL, context=colleague_context)).data[
         "pushAllMailChanges"
     ] == []
 
 
 async def test_retry_takes_every_failed_change_of_a_mailbox(
-    mailbox, greenmail, sync, aexecute
-):
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await _box(mailbox, greenmail, sync, subjects=("One", "Two"))
     ids = [box["messages"]["One"], box["messages"]["Two"]]
     await aexecute(MOVE, {"ids": ids, "f": box["folders"]["Archive"]})
@@ -163,12 +182,17 @@ async def test_retry_takes_every_failed_change_of_a_mailbox(
     assert all(r["attempts"] == 1 for r in retried)
 
     nothing = await aexecute("mutation { retryMailChanges { id } }", allow_errors=True)
-    assert nothing.errors[0].extensions["code"] == "VALIDATION_ERROR"
+    assert error_code(nothing) == "VALIDATION_ERROR"
 
 
 async def test_queue_events_reach_the_mailboxs_watchers_only(
-    mailbox, greenmail, sync, aexecute, subscribe, settings
-):
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    aexecute: AExecute,
+    subscribe: Subscribe,
+    settings: SettingsWrapper,
+) -> None:
     settings.KUVERT_WRITEBACK = {**settings.KUVERT_WRITEBACK, "undo_seconds_moves": 600}
     box, other = (
         await _box(mailbox, greenmail, sync),
@@ -218,8 +242,12 @@ async def test_queue_events_reach_the_mailboxs_watchers_only(
 
 
 async def test_a_failed_push_is_announced(
-    mailbox, greenmail, sync, aexecute, subscribe
-):
+    mailbox: Mailbox,
+    greenmail: GreenMail,
+    sync: Sync,
+    aexecute: AExecute,
+    subscribe: Subscribe,
+) -> None:
     box = await _box(mailbox, greenmail, sync)
     await aexecute(
         MOVE, {"ids": [box["messages"]["One"]], "f": box["folders"]["Archive"]}
@@ -239,7 +267,9 @@ async def test_a_failed_push_is_announced(
     }
 
 
-async def test_a_login_is_watched_until_it_settles(aexecute, fakeoauth, subscribe):
+async def test_a_login_is_watched_until_it_settles(
+    aexecute: AExecute, fakeoauth: FakeOAuth, subscribe: Subscribe
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]
@@ -262,8 +292,8 @@ async def test_a_login_is_watched_until_it_settles(aexecute, fakeoauth, subscrib
 
 
 async def test_an_expiring_login_reads_expired_without_an_announcement(
-    aexecute, fakeoauth, subscribe
-):
+    aexecute: AExecute, fakeoauth: FakeOAuth, subscribe: Subscribe
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]
@@ -279,7 +309,9 @@ async def test_an_expiring_login_reads_expired_without_an_announcement(
     }
 
 
-async def test_only_the_starter_watches_a_login(aexecute, fakeoauth, subscribe):
+async def test_only_the_starter_watches_a_login(
+    aexecute: AExecute, fakeoauth: FakeOAuth, subscribe: Subscribe
+) -> None:
     session = (await aexecute(START, {"input": {"provider": fakeoauth.gmail}})).data[
         "startOAuthLink"
     ]

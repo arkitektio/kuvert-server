@@ -10,11 +10,17 @@ import pytest
 from asgiref.sync import async_to_sync, sync_to_async
 from authentikate.models import Organization
 from django.core.management import call_command
+from kante.context import HttpContext
 
 from kuvert_server.schema import schema
 from kuvert_server.service import service
 from mail import models
-from tests.test_signals import intake  # noqa: F401  the fixture
+from tests.conftest import GreenMail
+from tests.support import AExecute, Mailbox, Sync
+from tests.test_signals import (
+    Intake,
+    intake,  # noqa: F401  the fixture
+)
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -31,8 +37,8 @@ SEND = (
 
 
 async def test_an_object_answers_the_descriptors_its_structure_declares(
-    mailbox, greenmail, sync, aexecute
-):
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     greenmail.deliver(
         box["address"],
@@ -77,7 +83,10 @@ async def test_an_object_answers_the_descriptors_its_structure_declares(
     assert list(data["outbox"][0]["descriptors"]) == declared["@kuvert/outgoingmessage"]
 
 
-def test_the_field_answers_what_the_signal_carried(intake, authenticated_context):  # noqa: F811
+def test_the_field_answers_what_the_signal_carried(
+    intake: Intake,  # noqa: F811
+    authenticated_context: HttpContext,
+) -> None:
     account = models.MailAccount.objects.create(
         organization=Organization.objects.get(identifier="static_issuer#static_org"),
         name="Team box",
@@ -96,6 +105,7 @@ def test_the_field_answers_what_the_signal_carried(intake, authenticated_context
         variable_values={"id": str(thread.pk)},
     )
     assert not result.errors, result.errors
+    assert result.data is not None
     assert (
         result.data["thread"]["descriptors"]
         == received["json"]["descriptors"]
@@ -113,7 +123,7 @@ REQUIRED = """
 
 
 async def _required(
-    aexecute, messages: list, threads: list, outbox: list
+    aexecute: AExecute, messages: list, threads: list, outbox: list
 ) -> dict[str, int]:
     result = await aexecute(
         REQUIRED, {"messages": messages, "threads": threads, "outbox": outbox}
@@ -123,8 +133,8 @@ async def _required(
 
 
 async def test_a_port_requires_is_answered_from_the_stored_descriptors(
-    mailbox, greenmail, sync, aexecute
-):
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     greenmail.deliver(
         box["address"],
@@ -183,8 +193,8 @@ async def test_a_port_requires_is_answered_from_the_stored_descriptors(
 
 
 async def test_the_setup_job_gives_a_row_what_it_owes(
-    mailbox, greenmail, sync, aexecute
-):
+    mailbox: Mailbox, greenmail: GreenMail, sync: Sync, aexecute: AExecute
+) -> None:
     box = await mailbox()
     greenmail.deliver(box["address"], "Old", "from before descriptors were stored")
     greenmail.wait_for(box["address"], 1)

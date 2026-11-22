@@ -5,19 +5,25 @@ from datetime import timedelta
 import pytest
 from arkitekt_datalayer.models import BigFileStore
 from asgiref.sync import sync_to_async
+from botocore.client import BaseClient
+from django.db.models import QuerySet
 from django.utils import timezone
+from kante.context import HttpContext
+from pytest_django.fixtures import SettingsWrapper
 
 from kuvert_server.hook_agent import agent
 from kuvert_server.service import service
 from mail import models
 from mail.scheduled import purge_orphaned_stores, reembed_stale, sync_all_mailboxes
+from tests.conftest import GreenMail
+from tests.support import Data, Mailbox
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 MINE, THEIRS = "static_issuer#static_org", "static_issuer#other_org"
 
 
-def test_actions_are_offered_and_wired_to_nothing(settings):
+def test_actions_are_offered_and_wired_to_nothing(settings: SettingsWrapper) -> None:
     actions = agent.actions
     assert {
         "sync_all_mailboxes",
@@ -33,11 +39,11 @@ def test_actions_are_offered_and_wired_to_nothing(settings):
     )
 
 
-def test_the_service_and_the_agent_are_separate_declarations():
+def test_the_service_and_the_agent_are_separate_declarations() -> None:
     assert "actions" not in service.manifest() and not hasattr(service, "action")
 
 
-async def test_sync_all_mailboxes(mailbox, greenmail):
+async def test_sync_all_mailboxes(mailbox: Mailbox, greenmail: GreenMail) -> None:
     one, two = await mailbox(), await mailbox()
     greenmail.deliver(one["address"], "a")
     greenmail.deliver(two["address"], "b")
@@ -59,7 +65,7 @@ async def test_sync_all_mailboxes(mailbox, greenmail):
     assert result["skipped"] == 1 and result["synced"] == 1
 
 
-async def test_reembed_and_purge_are_noops_when_nothing_is_stale():
+async def test_reembed_and_purge_are_noops_when_nothing_is_stale() -> None:
     assert await reembed_stale(MINE) == {"reembedded": 0}
     assert await purge_orphaned_stores(MINE) == {"purged": 0}
 
@@ -68,7 +74,9 @@ async def test_reembed_and_purge_are_noops_when_nothing_is_stale():
 
 
 @pytest.fixture
-async def boxes(mailbox, greenmail, other_org_context):
+async def boxes(
+    mailbox: Mailbox, greenmail: GreenMail, other_org_context: HttpContext
+) -> tuple[Data, Data]:
     """A mailbox with one message waiting on the server, in each of two organizations."""
     mine, theirs = await mailbox(), await mailbox(context=other_org_context)
     for box in (mine, theirs):
@@ -77,11 +85,13 @@ async def boxes(mailbox, greenmail, other_org_context):
     return mine, theirs
 
 
-def _messages(box: dict):
+def _messages(box: Data) -> QuerySet[models.Message]:
     return models.Message.objects.filter(account_id=box["id"])
 
 
-async def test_a_sync_for_one_organization_touches_only_its_mailboxes(boxes):
+async def test_a_sync_for_one_organization_touches_only_its_mailboxes(
+    boxes: tuple[Data, Data],
+) -> None:
     mine, theirs = boxes
 
     assert await sync_all_mailboxes("static_issuer#nobody") == {
@@ -108,7 +118,9 @@ async def test_a_sync_for_one_organization_touches_only_its_mailboxes(boxes):
     assert await _messages(mine).acount() == 1
 
 
-async def test_a_reembed_for_one_organization_embeds_only_its_messages(boxes):
+async def test_a_reembed_for_one_organization_embeds_only_its_messages(
+    boxes: tuple[Data, Data],
+) -> None:
     mine, theirs = boxes
     await sync_all_mailboxes(MINE)
     await sync_all_mailboxes(THEIRS)
@@ -122,7 +134,9 @@ async def test_a_reembed_for_one_organization_embeds_only_its_messages(boxes):
     assert (await _messages(mine).aget()).embedding_model != "another-model"
 
 
-async def test_a_purge_for_one_organization_deletes_only_its_stores(boxes, datalayer):
+async def test_a_purge_for_one_organization_deletes_only_its_stores(
+    boxes: tuple[Data, Data], datalayer: BaseClient
+) -> None:
     mine, theirs = boxes
     await sync_all_mailboxes(MINE)
     await sync_all_mailboxes(THEIRS)
