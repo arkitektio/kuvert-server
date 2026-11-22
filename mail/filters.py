@@ -137,6 +137,21 @@ class MailFolderFilter:
         """Only folders that are (not) synced."""
         return Q(**{f"{prefix}sync_enabled": value})
 
+    @strawberry_django.filter_field
+    def selectable(self, value: bool, prefix: str) -> Q:
+        """Only folders that can (not) hold messages (``\\Noselect`` folders only hold folders)."""
+        return Q(**{f"{prefix}selectable": value})
+
+    @strawberry_django.filter_field
+    def exists_on_server(self, value: bool, prefix: str) -> Q:
+        """Only folders the server still lists (true), or ones it stopped listing (false)."""
+        return Q(**{f"{prefix}exists_on_server": value})
+
+    @strawberry_django.filter_field
+    def search(self, value: str, prefix: str) -> Q:
+        """The name or the full path contains this (case-insensitive)."""
+        return Q(**{f"{prefix}name__icontains": value}) | Q(**{f"{prefix}path__icontains": value})
+
 
 def _with_message(prefix: str, messages: QuerySet) -> Q:
     """A conversation matches when any of its messages is in ``messages``."""
@@ -369,6 +384,11 @@ class MailChangeFilter:
     def account(self, value: strawberry.ID, prefix: str) -> Q:
         """Only changes of this mailbox."""
         return Q(**{f"{prefix}account_id": value})
+
+    @strawberry_django.filter_field
+    def accounts(self, value: list[strawberry.ID], prefix: str) -> Q:
+        """Only changes of these mailboxes."""
+        return Q(**{f"{prefix}account_id__in": value})
 
     @strawberry_django.filter_field
     def state(self, value: enums.MailChangeState, prefix: str) -> Q:

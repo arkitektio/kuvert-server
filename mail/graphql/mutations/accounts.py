@@ -10,6 +10,7 @@ from kante.errors import ValidationError
 from kante.types import Info
 
 from mail import changes, crypto, enums, models, presets, providers, storage, types
+from mail.channels import announce_changes
 from mail.accounts import incoming_credentials, incoming_endpoint, smtp_credentials, smtp_endpoint
 from mail.graphql.errors import translated
 from mail.graphql.utils import aget_or_404, get_many, get_or_404, require_owner
@@ -261,6 +262,7 @@ async def update_mail_account(info: Info, input: UpdateMailAccountInput) -> type
         account.status, account.last_error, account.last_error_code = models.MailAccountStatus.ACTIVE, None, None
     await account.asave()
     await database_sync_to_async(changes.apply_policy)(account, before, info.context.request.user)
+    await database_sync_to_async(announce_changes)(account.id)  # a policy change can drop or queue changes
     return account  # type: ignore[return-value]
 
 

@@ -29,6 +29,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from mail import accounts, models
+from mail.channels import announce_changes
 from mail.errors import AlreadySyncing, SyncTooSoon, code_for
 from mail.protocols.clients import open_imap, open_pop3
 
@@ -216,11 +217,12 @@ async def sync_account(account_id: int, folder_ids: list[int] | None = None) -> 
         await database_sync_to_async(release)(account_id)
     logger.info("Synced mailbox %s: %s new, %s updated, %s deleted", account_id, result.created, result.updated, result.deleted)
     await database_sync_to_async(broadcast_sync)(result)
+    await database_sync_to_async(announce_changes)(account_id, result.pushed)  # a sync pushes, resolves and fails changes too
     return result
 
 
-async def push_account(account_id: int) -> SyncResult | None:
-    """:func:`push_now` in a worker; subscribers hear of what it moved."""
+async def _push(account_id: int) -> SyncResult | None:
+    """:func:`push_now` in a worker; ``mailboxSyncs`` subscribers hear of the folders it touched."""
     from mail.channels import broadcast_sync
 
     result = await in_worker(push_now, account_id)
@@ -229,11 +231,23 @@ async def push_account(account_id: int) -> SyncResult | None:
     return result
 
 
+async def push_account(account_id: int) -> SyncResult | None:
+    """:func:`push_now` in a worker; subscribers hear of what it moved and where the queue stands."""
+    result = await _push(account_id)
+    if result is not None:  # None: nothing was due, or a sync holds the mailbox (and announces itself)
+        await database_sync_to_async(announce_changes)(account_id, result.pushed)
+    return result
+
+
 async def push_soon(account_id: int) -> None:
-    """After a request queued changes: push them right away when ``writeback.push_inline`` (never failing the request)."""
-    if not settings.KUVERT_WRITEBACK.get("push_inline", True):
-        return
-    try:
-        await push_account(account_id)
-    except Exception as error:  # recorded on the mailbox; the change stays queued
-        logger.info("Pushing changes of mailbox %s right away failed: %s", account_id, error)
+    """After a request queued changes: push them right away when ``writeback.push_inline`` (never failing the request).
+
+    ``mailChanges`` subscribers hear of the queue either way: the request changed it.
+    """
+    result = None
+    if settings.KUVERT_WRITEBACK.get("push_inline", True):
+        try:
+            result = await _push(account_id)
+        except Exception as error:  # recorded on the mailbox; the change stays queued
+            logger.info("Pushing changes of mailbox %s right away failed: %s", account_id, error)
+    await database_sync_to_async(announce_changes)(account_id, result.pushed if result else 0)

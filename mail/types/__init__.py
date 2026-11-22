@@ -587,6 +587,14 @@ class MailboxSyncEvent:
     folders: List[strawberry.ID] = strawberry.field(description="The folders whose messages changed, so a client refetches only those lists.")
 
 
+@strawberry.type(description="Where a mailbox's queue of changes stands, after something queued, pushed, failed, retried or undid changes.")
+class MailChangesEvent:
+    account_id: strawberry.ID
+    pending: int = strawberry.field(description="Changes still waiting.")
+    failed: int = strawberry.field(description="Changes that did not reach the server.")
+    pushed: int = strawberry.field(description="Changes that reached the server in the pass that caused this event.")
+
+
 @strawberry.type(description="What a delete did.")
 class DeleteResult:
     deleted: int = strawberry.field(description="Messages deleted or moved to Trash (here at once; on the server after the undo window).")

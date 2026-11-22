@@ -88,6 +88,7 @@ class Query:
     categories: list[types.Category] = field(description="Categories of the visible mailboxes (filter by `account`).")
     category: types.Category = field(resolver=queries.category, description="A category by id.")
     mail_changes: list[types.MailChange] = field(description="Changes made here that have not reached the server yet (pending or failed), oldest first.")
+    mail_changes_count: int = field(resolver=queries.mail_changes_count, description="How many queued changes match the filters (the same as `mailChanges`), past any page.")
     outbox: list[types.OutgoingMessage] = field(description="Mail sent through the visible mailboxes, newest first.")
     outgoing_message: types.OutgoingMessage = field(resolver=queries.outgoing_message, description="A sent message by id.")
     mail_presets: list[types.MailPreset] = field(resolver=queries.mail_presets, description="Server settings of well-known providers (the one for `address`, when given).")
@@ -126,8 +127,9 @@ class Mutation:
     categorize_messages = mutation(resolver=mutations.categorize_messages, description="Put messages into categories and take them out.")
     undo_mail_changes = mutation(resolver=mutations.undo_mail_changes, description="Take back changes that have not reached the server.")
     revert_messages_to_server = mutation(resolver=mutations.revert_messages_to_server, description="Drop local-only and queued flag changes of messages: back to what the server has.")
-    retry_mail_changes = mutation(resolver=mutations.retry_mail_changes, description="Queue failed changes again.")
+    retry_mail_changes = mutation(resolver=mutations.retry_mail_changes, description="Queue failed changes again: these, or every failed change of a mailbox.")
     push_mail_changes = mutation(resolver=mutations.push_mail_changes, description="Push a mailbox's due changes now.")
+    push_all_mail_changes = mutation(resolver=mutations.push_all_mail_changes, description="Push the due changes of several mailboxes now: these, or every visible one with pending changes.")
     # Categories (per mailbox, shared)
     create_category = mutation(resolver=mutations.create_category, description="Create a category of a mailbox.")
     update_category = mutation(resolver=mutations.update_category, description="Change a category.")
@@ -160,6 +162,8 @@ class Subscription:
     """The root subscription type."""
 
     mailbox_syncs = subscription(resolver=subscriptions.mailbox_syncs, description="Events whenever a visible mailbox finished syncing.")
+    mail_changes = subscription(resolver=subscriptions.mail_changes, description="Where a visible mailbox's queue of changes stands, whenever something queues, pushes, fails, retries or undoes a change.")
+    auth_session = subscription(resolver=subscriptions.auth_session, description="A login as it is now, then whenever it changes, until it is no longer PENDING. Only its starter may watch it.")
 
 
 # A federation schema is required because the authentikate types (User,

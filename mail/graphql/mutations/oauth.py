@@ -8,6 +8,7 @@ from kante.errors import ValidationError
 from kante.types import Info
 
 from mail import enums, models, types
+from mail.channels import announce_auth
 from mail.graphql.errors import translated
 from mail.graphql.utils import get_or_404, require_owner
 from mail.oauth import linking
@@ -63,7 +64,15 @@ def _own_login(info: Info, state: str) -> models.OAuthLink:
 
 
 def _complete(info: Info, input: CompleteAuthInput) -> models.OAuthLink:
-    return linking.complete(_own_login(info, input.state), input.code, input.error, input.error_description)
+    link = linking.complete(_own_login(info, input.state), input.code, input.error, input.error_description)
+    announce_auth(link.state)
+    return link
+
+
+def _cancel(info: Info, state: str) -> models.OAuthLink:
+    link = linking.cancel(_own_login(info, state))
+    announce_auth(link.state)
+    return link
 
 
 @translated
@@ -84,7 +93,7 @@ async def resume_auth(info: Info, state: str) -> types.AuthSession:
 @translated
 async def cancel_auth(info: Info, state: str) -> types.AuthSession:
     """Drop a login that will not be finished. Idempotent."""
-    return types.AuthSession.of(await database_sync_to_async(lambda: linking.cancel(_own_login(info, state)))())
+    return types.AuthSession.of(await database_sync_to_async(_cancel)(info, state))
 
 
 @translated

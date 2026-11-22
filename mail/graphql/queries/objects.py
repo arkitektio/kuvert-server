@@ -10,7 +10,7 @@ from mail import enums, filters, models, presets, types
 from mail.graphql.utils import get_or_404
 from mail.scoping import for_org
 
-__all__ = ["mail_account", "mail_provider", "provider_kinds", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "threads_count", "messages_count", "task", "task_list", "tasks_count", "category"]
+__all__ = ["mail_account", "mail_provider", "provider_kinds", "mail_folder", "message", "thread", "outgoing_message", "mail_presets", "threads_count", "messages_count", "mail_changes_count", "task", "task_list", "tasks_count", "category"]
 
 
 def threads_count(info: Info, filters: Optional[filters.ThreadFilter] = None) -> int:
@@ -24,6 +24,14 @@ def threads_count(info: Info, filters: Optional[filters.ThreadFilter] = None) ->
 def messages_count(info: Info, filters: Optional[filters.MessageFilter] = None) -> int:
     """How many messages match (the same filters as `messages`)."""
     rows = for_org(models.Message, info).filter(deleted_at=None)
+    if filters is not None:
+        rows = strawberry_django.filters.apply(filters, rows, info)
+    return rows.count()
+
+
+def mail_changes_count(info: Info, filters: Optional[filters.MailChangeFilter] = None) -> int:
+    """How many queued changes match (the same filters as `mailChanges`), e.g. for a badge or a list header."""
+    rows = for_org(models.MailChange, info)
     if filters is not None:
         rows = strawberry_django.filters.apply(filters, rows, info)
     return rows.count()

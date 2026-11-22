@@ -14,8 +14,10 @@ from kante.errors import ValidationError
 from kante.types import Info
 
 from mail import changes, models, types
+from mail.channels import announce_changes
 from mail.graphql.errors import translated
 from mail.graphql.utils import aget_or_404, get_many, get_or_404
+from mail.scoping import for_org
 from mail.sync import push_account, push_soon
 
 __all__ = [
@@ -34,6 +36,7 @@ __all__ = [
     "revert_messages_to_server",
     "retry_mail_changes",
     "push_mail_changes",
+    "push_all_mail_changes",
 ]
 
 _FLAG_CHARS = set("\\$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
@@ -186,6 +189,7 @@ def _undo(info: Info, input: UndoMailChangesInput) -> list[models.Message]:
     out: list[models.Message] = []
     for account_id, account_changes in by_account.items():
         out += changes.undo(models.MailAccount.objects.get(id=account_id), account_changes)
+        announce_changes(account_id)
     return out
 
 
@@ -199,6 +203,7 @@ def _revert(info: Info, messages: list[strawberry.ID]) -> list[models.Message]:
     out: list[models.Message] = []
     for account, rows in _load(info, messages).values():
         out += changes.revert_to_server(account, rows)
+        announce_changes(account.id)
     return out
 
 
@@ -208,28 +213,49 @@ async def revert_messages_to_server(info: Info, messages: list[strawberry.ID]) -
     return await database_sync_to_async(_revert)(info, messages)  # type: ignore[return-value]
 
 
-def _retry(info: Info, ids: list[strawberry.ID]) -> tuple[list[models.MailChange], set[int]]:
+def _retry(info: Info, ids: list[strawberry.ID] | None, account: strawberry.ID | None) -> tuple[list[models.MailChange], set[int]]:
     from django.utils import timezone
 
-    rows = get_many(models.MailChange, info, ids)
+    if ids is None and account is None:
+        raise ValidationError("Give changes or a mailbox.")
+    rows = get_many(models.MailChange, info, ids) if ids else []
+    if account is not None:
+        mailbox = get_or_404(models.MailAccount, info, account)
+        rows += list(models.MailChange.objects.filter(account=mailbox, state=models.MailChangeState.FAILED))
     models.MailChange.objects.filter(id__in=[r.id for r in rows], state=models.MailChangeState.FAILED).update(state=models.MailChangeState.PENDING, attempts=0, error=None, error_code=None, push_after=timezone.now())
     return list(models.MailChange.objects.filter(id__in=[r.id for r in rows])), {r.account_id for r in rows}
 
 
 @translated
-async def retry_mail_changes(info: Info, changes: list[strawberry.ID]) -> list[types.MailChange]:
-    """Queue FAILED changes again, due now."""
-    rows, accounts = await database_sync_to_async(_retry)(info, changes)
+async def retry_mail_changes(info: Info, changes: Optional[list[strawberry.ID]] = None, account: Optional[strawberry.ID] = None) -> list[types.MailChange]:
+    """Queue FAILED changes again, due now: these `changes`, and every failed change of `account`."""
+    rows, accounts = await database_sync_to_async(_retry)(info, changes, account)
     for account_id in accounts:
         await push_soon(account_id)
     return [row async for row in models.MailChange.objects.filter(id__in=[r.id for r in rows])]  # type: ignore[return-value]
 
 
-@translated
-async def push_mail_changes(info: Info, account: strawberry.ID) -> types.PushResult:
-    """Push a mailbox's due changes now (without syncing). Pushes nothing while a sync holds the mailbox -- that sync pushes them."""
-    mailbox = await aget_or_404(models.MailAccount, info, account)
+async def _push_one(mailbox: models.MailAccount) -> types.PushResult:
     result = await push_account(mailbox.id)
     pending = await models.MailChange.objects.filter(account=mailbox, state=models.MailChangeState.PENDING).acount()
     failed = await models.MailChange.objects.filter(account=mailbox, state=models.MailChangeState.FAILED).acount()
     return types.PushResult(account=mailbox, pushed=result.pushed if result else 0, pending=pending, failed=failed)  # type: ignore[arg-type]
+
+
+@translated
+async def push_mail_changes(info: Info, account: strawberry.ID) -> types.PushResult:
+    """Push a mailbox's due changes now (without syncing). Pushes nothing while a sync holds the mailbox -- that sync pushes them."""
+    return await _push_one(await aget_or_404(models.MailAccount, info, account))
+
+
+def _with_pending(info: Info, accounts: list[strawberry.ID] | None) -> list[models.MailAccount]:
+    if accounts is not None:
+        return get_many(models.MailAccount, info, accounts)
+    pending = models.MailChange.objects.filter(state=models.MailChangeState.PENDING).values("account_id")
+    return list(for_org(models.MailAccount, info).filter(id__in=pending).order_by("id"))
+
+
+@translated
+async def push_all_mail_changes(info: Info, accounts: Optional[list[strawberry.ID]] = None) -> list[types.PushResult]:
+    """Push the due changes of several mailboxes now, one after the other: these `accounts`, or every visible mailbox with pending changes."""
+    return [await _push_one(mailbox) for mailbox in await database_sync_to_async(_with_pending)(info, accounts)]
