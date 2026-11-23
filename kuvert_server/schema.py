@@ -5,7 +5,13 @@ Every field requires an authenticated caller and asks for one of kuvert's scopes
 ``kuvert_read``, writes for the scope of their section. Every write also asks for
 ``kuvert_editor`` (``kuvert_admin`` holds every role). Every read sees only the caller's active
 organization and, within it, only the mailboxes the caller may see (their own, ones shared with
-them, and organization-wide ones) -- ``OrgScoped`` types and the ``mail.scoping`` lookups. Only
+them, and organization-wide ones) -- ``OrgScoped`` types and the ``mail.scoping`` lookups.
+
+A guest of the organization (``arkitekt_service.collaborations``) sees the conversations, messages
+and sent mail put in their collaborations, and nothing else: every read is held to them
+(``mail.scoping.held_to_guest``), and the ``CollaborationGate`` drops whatever a resolver hands
+out that is in none of them. Guests only read: no mutation and no subscription is open to them,
+so nothing a guest does reaches a mail server. Only
 the member who linked a mailbox changes its credentials or sharing, or unlinks it. Any editor may
 link a mailbox; only kuvert's admins set up the providers mailboxes are linked through
 (``admin_mutation``).
@@ -25,9 +31,16 @@ from arkitekt_datalayer import mutations as datalayer_mutations
 from arkitekt_datalayer import scalars as datalayer_scalars
 from arkitekt_datalayer import types as datalayer_types
 from arkitekt_datalayer.datalayer import load_config
-from arkitekt_service.graphql import TelemetryExtension, annotate_schema
+from arkitekt_service.collaborations import graphql as collaboration_types
+from arkitekt_service.graphql import (
+    CollaborationGate,
+    TelemetryExtension,
+    annotate_schema,
+)
 from authentikate.strawberry.directives import AuthExtension, AuthSubscribeExtension
 from authentikate.strawberry.extension import AuthentikateExtension
+from django.db.models import Model
+from kante.types import Info
 from koherent.strawberry.extension import KoherentExtension
 from strawberry.schema.config import StrawberryConfig
 from strawberry_django.optimizer import DjangoOptimizerExtension
@@ -35,8 +48,33 @@ from strawberry_django.optimizer import DjangoOptimizerExtension
 from kuvert_server.contract import ADMIN, EDITOR
 from kuvert_server.logs import QuietErrorsSchema
 from kuvert_server.service import service as kuvert_service
-from mail import types
+from mail import models, types
 from mail.graphql import mutations, queries, subscriptions
+from mail.scoping import for_org
+
+#: What a member may put in a collaboration, each read as they see it (their mailboxes' mail
+#: only). A mailbox and its folders hold everything in them, and a mailbox its credentials; a
+#: provider holds an OAuth client's secret: none of them is ever shown to a guest.
+SHAREABLE: frozenset[type[Model]] = frozenset(
+    {models.Thread, models.Message, models.OutgoingMessage}
+)
+
+
+def _shareable(model: type[Model], id: strawberry.ID, info: Info) -> Model:
+    """The object a collaboration mutation names, as the member sees it; refused unless it is shareable."""
+    if model not in SHAREABLE:
+        raise PermissionError(
+            f"A {model.__name__} is never put in a collaboration: only conversations, messages and sent mail are"
+        )
+    rows = for_org(model, info)
+    if model is models.Message:
+        rows = rows.filter(deleted_at=None)
+    found: Model = rows.get(id=id)
+    return found
+
+
+#: The collaborations kuvert's mail is shared in, which a guest of the organization is granted.
+collaboration_api = collaboration_types.resolvers(fetch=_shareable)
 
 
 def field(scope: str = "kuvert_read", **kwargs: Any) -> Any:  # noqa: ANN401 -- as strawberry_django.field: the value of `x: T = field()`
@@ -77,6 +115,20 @@ def subscription(**kwargs: Any) -> Any:  # noqa: ANN401 -- as strawberry.subscri
 @strawberry.type
 class Query:
     """The root query type."""
+
+    # Collaborations
+    collaborations: list[collaboration_types.Collaboration] = field(
+        resolver=collaboration_api.collaborations,
+        description="The organization's collaborations kuvert holds mail in (a guest: the ones granted to them).",
+    )
+    collaboration: collaboration_types.Collaboration = field(
+        resolver=collaboration_api.collaboration,
+        description="What kuvert holds in a collaboration, by its key (lok's).",
+    )
+    collaborations_stats: collaboration_types.CollaborationStats = field(
+        resolver=collaboration_api.collaborations_stats,
+        description="Count the collaborations `collaborations` lists, and the objects in them.",
+    )
 
     mail_providers: list[types.MailProvider] = field(
         description="The providers the organization set up; every mailbox is linked through one."
@@ -163,6 +215,33 @@ class Query:
 @strawberry.type
 class Mutation:
     """The root mutation type."""
+
+    # Collaborations (view only for the guests they are granted to)
+    add_to_collaboration = mutation(
+        scope="kuvert_share",
+        resolver=collaboration_api.add_to_collaboration,
+        description="Put a conversation, a message or sent mail in a collaboration (lok's, by its key) for its guests to read: a conversation brings its messages as they are now, a message its attachments. Never a mailbox or a provider. The first thing put in makes kuvert's row of the collaboration.",
+    )
+    add_many_to_collaboration = mutation(
+        scope="kuvert_share",
+        resolver=collaboration_api.add_many_to_collaboration,
+        description="Put several conversations, messages or sent mails in a collaboration at once, each with what it needs to be read; all or none.",
+    )
+    share_workflow = mutation(
+        scope="kuvert_share",
+        resolver=collaboration_api.share_workflow,
+        description="Put the mail a workflow (its root task) sent, through mailboxes the caller sees, in a collaboration, as it is now. Messages and conversations come from the mail server and record no workflow: they are reported unknown. `dryRun` only says what would be put in.",
+    )
+    remove_from_collaboration = mutation(
+        scope="kuvert_share",
+        resolver=collaboration_api.remove_from_collaboration,
+        description="Take mail out of a collaboration, with what it brought that nothing else there needs.",
+    )
+    delete_collaboration = mutation(
+        scope="kuvert_share",
+        resolver=collaboration_api.delete_collaboration,
+        description="Take everything kuvert holds in a collaboration (by its key) out of it: its guests read none of it here any more. lok's collaboration and its grants stay.",
+    )
 
     # Providers (admins only)
     create_server_provider = admin_mutation(
@@ -389,11 +468,14 @@ schema = Schema(
     subscription=Subscription,
     types=[datalayer_types.BigFileStore],
     config=StrawberryConfig(scalar_map={**datalayer_scalars.SCALAR_MAP}),
+    # A guest of the organization is handed only what is in their collaborations (CollaborationGate).
     extensions=[
         TelemetryExtension,
         DjangoOptimizerExtension,
         AuthentikateExtension,
+        CollaborationGate,
         KoherentExtension,
     ],
 )
+# Which structure each type is (`@identified`), and, behind the gate, that kuvert lets guests in.
 annotate_schema(schema, kuvert_service)

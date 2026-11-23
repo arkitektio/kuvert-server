@@ -20,6 +20,16 @@
                 }
             }
         ],
+        "./kuvert_server/service.py": [
+            {
+                "code": "reportArgumentType",
+                "range": {
+                    "startColumn": 27,
+                    "endColumn": 31,
+                    "lineCount": 1
+                }
+            }
+        ],
         "./mail/changes.py": [
             {
                 "code": "reportCallIssue",

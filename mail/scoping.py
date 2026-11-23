@@ -15,12 +15,18 @@ List fields are scoped through ``OrgScoped.get_queryset`` on the GraphQL types; 
 fetches a row by id (mutations, single-object queries, subscriptions) goes through
 :func:`for_org`, :func:`get_for_org` or :func:`aget_for_org`. A row the caller cannot see is
 NOT_FOUND exactly like a missing one (:mod:`mail.graphql.utils`).
+
+A guest of the organization (``arkitekt_service.collaborations``) holds no mailbox: 2 and 3 do not
+apply to them. What a member put in a collaboration of theirs (a conversation, a message, sent
+mail) is what they see, at every depth (:func:`held_to_guest`): a conversation's participants and
+unread count are those of its shared messages, never of the rest of the mailbox.
 """
 
 from collections.abc import Callable
 from functools import cache
 from typing import Any
 
+from arkitekt_service.collaborations.guests import guest_of, object_scope
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models as django_models
 from django.db.models import Q
@@ -128,11 +134,30 @@ def scope_to(
     return queryset
 
 
+def held_to_guest(
+    queryset: django_models.QuerySet, organization: Organization
+) -> django_models.QuerySet:
+    """For a guest of ``organization``: its rows in their collaborations, and nothing else.
+
+    Narrowed wherever it is read, not only at a root field (``object_scope`` without the resolve
+    info): what a nested field computes from rows (a conversation's participants, its unread
+    count) is computed from the shared ones. A model no collaboration can hold (a mailbox, a
+    folder, a task) is empty.
+    """
+    path = organization_path(queryset.model)
+    if path is None:
+        return queryset.none()
+    held: django_models.QuerySet = object_scope(queryset.filter(**{path: organization}))
+    return held
+
+
 def scope_queryset(
     queryset: django_models.QuerySet, info: Info
 ) -> django_models.QuerySet:
-    """Narrow ``queryset`` to what the request's user may see in its organization."""
+    """Narrow ``queryset`` to what the request's user may see in its organization (a guest: their collaborations)."""
     request = info.context.request
+    if guest_of(info) is not None:
+        return held_to_guest(queryset, request.organization)
     return scope_to(queryset, request.organization, request.user)
 
 

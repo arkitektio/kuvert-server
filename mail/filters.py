@@ -9,6 +9,7 @@ from enum import Enum
 
 import strawberry
 import strawberry_django
+from arkitekt_service.collaborations.filters import SharingFilterMixin
 from django.db.models import Exists, OuterRef, Q, QuerySet
 from django.utils import timezone
 from kante.types import Info
@@ -71,7 +72,7 @@ def _requires(model: type, value: list[DescriptorConstraintInput], prefix: str) 
 
 
 @strawberry_django.filter_type(models.MailProvider)
-class MailProviderFilter:
+class MailProviderFilter(SharingFilterMixin):
     """Filtering options for providers."""
 
     @strawberry_django.filter_field
@@ -225,7 +226,7 @@ def _message_text(value: str, prefix: str = "") -> Q:
 
 
 @strawberry_django.filter_type(models.Message)
-class MessageFilter:
+class MessageFilter(SharingFilterMixin):
     """Filtering options for messages."""
 
     @strawberry_django.filter_field
@@ -358,7 +359,7 @@ class MessageOrder:
 
 
 @strawberry_django.filter_type(models.Thread)
-class ThreadFilter:
+class ThreadFilter(SharingFilterMixin):
     """Filtering options for conversations."""
 
     @strawberry_django.filter_field
@@ -514,7 +515,7 @@ class CategoryFilter:
 
 
 @strawberry_django.filter_type(models.OutgoingMessage)
-class OutgoingMessageFilter:
+class OutgoingMessageFilter(SharingFilterMixin):
     """Filtering options for sent mail."""
 
     @strawberry_django.filter_field

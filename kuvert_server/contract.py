@@ -49,6 +49,10 @@ SCOPES = [
         description="Set up the mail providers (IMAP servers, Gmail, Microsoft) that mailboxes connect through.",
     ),
     Scope(
+        key="kuvert_share",
+        description="Share conversations, messages and sent mail with people outside your organization through collaborations, for them to read.",
+    ),
+    Scope(
         key="kuvert_all",
         description="Do everything in Kuvert on your behalf.",
         is_all_scope=True,
@@ -64,7 +68,7 @@ ROLES = [
     ),
     Role(
         key="kuvert_editor",
-        description="Link mailboxes, and organise and send mail.",
+        description="Link mailboxes, organise and send mail, and share it through collaborations.",
         is_default_role=True,
     ),
 ]

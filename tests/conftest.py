@@ -23,7 +23,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from email.message import EmailMessage
@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import psycopg
 import pytest
+from authentikate import settings as authentikate_settings
 from authentikate.models import Client, Membership, Organization, User
 from botocore.client import BaseClient
 from dokker import testing
@@ -49,11 +50,13 @@ from tests.support import (
     AExecute,
     Data,
     DovecotMailbox,
+    GuestFactory,
     Mailbox,
     ProviderFor,
     Subscribe,
     Sync,
     WsContexts,
+    request_context,
 )
 
 if TYPE_CHECKING:
@@ -403,6 +406,36 @@ def colleague_context(transactional_db: None) -> HttpContext:
 def other_org_context(transactional_db: None) -> HttpContext:
     """A member of ``other_org``."""
     return _context("othertest", "9", "other_org")
+
+
+@pytest.fixture
+def guest(
+    transactional_db: None,
+    authenticated_context: HttpContext,
+    settings: SettingsWrapper,
+) -> Iterator[GuestFactory]:
+    """``guest({key: roles})``: a context presenting a guest of ``static_org`` (sub 20), granted
+    those collaborations by their key, as lok lists them in the token's ``collabs``. Holds no role
+    of the organization, through an app granted all of kuvert."""
+
+    def mint(collaborations: Mapping[str, list[str]]) -> HttpContext:
+        settings.AUTHENTIKATE = {
+            **settings.AUTHENTIKATE,
+            "static_tokens": {
+                **settings.AUTHENTIKATE["static_tokens"],
+                "guest": {
+                    "sub": "20",
+                    "roles": [],
+                    "collabs": dict(collaborations),
+                    "scope": "openid kuvert_all",
+                },
+            },
+        }
+        authentikate_settings.cached_settings = None
+        return request_context("guest")
+
+    yield mint
+    authentikate_settings.cached_settings = None
 
 
 @pytest.fixture

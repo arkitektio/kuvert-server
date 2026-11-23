@@ -618,12 +618,8 @@ class Thread(OrgScoped):
     @strawberry_django.field(
         description="Whether a message of the conversation is unread."
     )
-    def unread(self) -> bool:
-        return (
-            models.Message.objects.filter(thread_id=self.id, deleted_at=None)
-            .exclude(flags__contains=["\\Seen"])
-            .exists()
-        )  # type: ignore[attr-defined]
+    def unread(self, info: Info) -> bool:
+        return _thread_messages(self, info).exclude(flags__contains=["\\Seen"]).exists()
 
     @strawberry_django.field(
         description="The newest message, optionally only within a folder or a folder role: what a list row shows. Null when the conversation has no message there."

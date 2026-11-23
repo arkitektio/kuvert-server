@@ -44,6 +44,27 @@ AUTHENTIKATE = {
             "readertest": {"sub": "1", "scope": "openid kuvert_read"},
         }.items()
     },
+    # A rekuest that signs task tokens with tests/fixtures/provenance_key.json: what a workflow
+    # sent (tests/test_share_workflow.py).
+    "provenance": {
+        "issuers": [
+            {
+                "iss": "rekuest",
+                "kind": "jwks_dict",
+                "jwks": {
+                    "keys": [
+                        {
+                            "crv": "Ed25519",
+                            "x": "_NURfZy7gaD4M3yQLitMcldTnIPhSykAAtvNhntJMXE",
+                            "kty": "OKP",
+                            "kid": "kuvert-test-provenance",
+                        }
+                    ]
+                },
+            }
+        ],
+        "audience": "*",
+    },
 }
 
 # `conftest.fernet_key` writes a key generated for the run and points this at it.
