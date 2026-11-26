@@ -2,14 +2,14 @@
 and, within it, only the mailboxes the caller may see."""
 
 import datetime
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import kante
 import strawberry
 import strawberry_django
 from arkitekt_datalayer import types as datalayer_types
 from django.conf import settings
-from django.db.models import F, QuerySet
+from django.db.models import F, Q, QuerySet
 from django.utils import timezone
 from kante.types import Info
 from strawberry.scalars import JSON
@@ -430,6 +430,26 @@ class Attachment(OrgScoped):
     )
     def store(self) -> datalayer_types.BigFileStore | None:
         return self.store  # type: ignore[attr-defined,return-value]
+
+    @strawberry_django.field(
+        description="The other attachments of this organization holding the same bytes: the same stored file, or one whose `digest` and size are this one's (the same document sent in several mails). Empty while the digest is owed; read only"
+    )
+    def duplicates(self) -> list["Attachment"]:
+        own = cast(models.Attachment, self)
+        store = own.store
+        if store is None:
+            return []
+        same = Q(store_id=store.pk)
+        if store.digest is not None:
+            same |= Q(store__digest=store.digest, store__size_bytes=store.size_bytes)
+        return cast(
+            list[Attachment],
+            list(
+                models.Attachment.objects.filter(same, store__organization_id=store.organization_id)
+                .exclude(pk=own.pk)
+                .order_by("pk")
+            ),
+        )
 
 
 @kante.django_type(
