@@ -445,7 +445,9 @@ class Attachment(OrgScoped):
         return cast(
             list[Attachment],
             list(
-                models.Attachment.objects.filter(same, store__organization_id=store.organization_id)
+                models.Attachment.objects.filter(
+                    same, store__organization_id=store.organization_id
+                )
                 .exclude(pk=own.pk)
                 .order_by("pk")
             ),
